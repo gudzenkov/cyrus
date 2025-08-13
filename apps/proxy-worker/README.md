@@ -131,7 +131,7 @@ npx wrangler secret put ENCRYPTION_KEY --env preview
 #### How to obtain these secrets:
 
 1. **LINEAR_CLIENT_ID, LINEAR_CLIENT_SECRET & LINEAR_WEBHOOK_SECRET**: 
-   - Create a new Linear OAuth application: https://linear.app/reify-nz/settings/api/applications/new
+   - Create a new Linear OAuth application: https://linear.app/settings/api/applications/new
    - Fill in the application details
    - **Important**: Enable webhooks and select "Agent session events" under webhook settings
    - Copy the Client ID, Client Secret, and Webhook Secret
