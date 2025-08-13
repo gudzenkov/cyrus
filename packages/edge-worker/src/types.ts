@@ -1,6 +1,6 @@
 import type { Issue as LinearIssue } from "@linear/sdk";
 import type { SDKMessage } from "cyrus-claude-runner";
-import type { Workspace } from "cyrus-core";
+import type { CyrusAgentSession, Workspace } from "cyrus-core";
 import type { OAuthCallbackHandler } from "./SharedApplicationServer.js";
 
 /**
@@ -21,6 +21,7 @@ export interface RepositoryConfig {
 	linearToken: string; // OAuth token for this Linear workspace
 	teamKeys?: string[]; // Linear team keys for routing (e.g., ["CEE", "BOOK"])
 	routingLabels?: string[]; // Linear labels for routing issues to this repository (e.g., ["backend", "api"])
+	projectKeys?: string[]; // Linear project names for routing (e.g., ["Mobile App", "API"])
 
 	// Workspace configuration
 	workspaceBaseDir: string; // Where to create issue workspaces for this repo
@@ -34,9 +35,18 @@ export interface RepositoryConfig {
 
 	// Label-based system prompt configuration
 	labelPrompts?: {
-		debugger?: string[]; // Labels that trigger debugger mode (e.g., ["Bug"])
-		builder?: string[]; // Labels that trigger builder mode (e.g., ["Feature", "Improvement"])
-		scoper?: string[]; // Labels that trigger scoper mode (e.g., ["PRD"])
+		debugger?: {
+			labels: string[]; // Labels that trigger debugger mode (e.g., ["Bug"])
+			allowedTools?: string[] | "readOnly" | "safe" | "all"; // Tool restrictions for debugger mode
+		};
+		builder?: {
+			labels: string[]; // Labels that trigger builder mode (e.g., ["Feature", "Improvement"])
+			allowedTools?: string[] | "readOnly" | "safe" | "all"; // Tool restrictions for builder mode
+		};
+		scoper?: {
+			labels: string[]; // Labels that trigger scoper mode (e.g., ["PRD"])
+			allowedTools?: string[] | "readOnly" | "safe" | "all"; // Tool restrictions for scoper mode
+		};
 	};
 }
 
@@ -55,6 +65,19 @@ export interface EdgeWorkerConfig {
 
 	// Claude config (shared across all repos)
 	defaultAllowedTools?: string[];
+
+	// Global defaults for prompt types
+	promptDefaults?: {
+		debugger?: {
+			allowedTools?: string[] | "readOnly" | "safe" | "all";
+		};
+		builder?: {
+			allowedTools?: string[] | "readOnly" | "safe" | "all";
+		};
+		scoper?: {
+			allowedTools?: string[] | "readOnly" | "safe" | "all";
+		};
+	};
 
 	// Repository configurations
 	repositories: RepositoryConfig[];
@@ -145,4 +168,17 @@ export interface EdgeWorkerEvents {
 
 	// Error events
 	error: (error: Error, context?: any) => void;
+}
+
+/**
+ * Data returned from createLinearAgentSession
+ */
+export interface LinearAgentSessionData {
+	session: CyrusAgentSession;
+	fullIssue: LinearIssue;
+	workspace: Workspace;
+	attachmentResult: { manifest: string; attachmentsDir: string | null };
+	attachmentsDir: string;
+	allowedDirectories: string[];
+	allowedTools: string[];
 }
