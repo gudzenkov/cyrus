@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import type { EdgeEvent, LinearWebhook, Env } from "../types";
+import type { EdgeEvent, Env, LinearWebhook } from "../types";
 import {
 	EdgeWorkerRegistry,
 	type StoredEdgeWorker,
