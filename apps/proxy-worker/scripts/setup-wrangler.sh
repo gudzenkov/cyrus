@@ -27,6 +27,20 @@ fi
 
 echo "✅ Wrangler authentication verified."
 
+# Check for PROXY_URL and validate
+if [ -z "$PROXY_URL" ]; then
+    echo "⚠️  PROXY_URL not set. OAuth will use default redirect URI."
+    echo "   For custom deployments, set: export PROXY_URL=https://your-worker.workers.dev"
+    echo ""
+else
+    echo "✅ PROXY_URL detected: $PROXY_URL"
+    # Validate URL format
+    if [[ ! "$PROXY_URL" =~ ^https:// ]]; then
+        echo "❌ PROXY_URL must use HTTPS protocol"
+        exit 1
+    fi
+fi
+
 echo "🗂️  Checking and creating KV namespaces..."
 
 # Function to extract existing namespace IDs from wrangler.toml
@@ -68,36 +82,61 @@ setup_namespace() {
     local preview_flag="$3"
     local id_type="id"
     local display_suffix=""
-    
+
     if [ "$preview_flag" = "--preview" ]; then
         id_type="preview_id"
         display_suffix="_preview"
     fi
-    
+
     echo "Checking $binding$display_suffix namespace..." >&2
-    
-    # Try to get existing ID from wrangler.toml
+
+    # First, try to get existing ID from wrangler.toml
     existing_id=$(get_existing_namespace_id "$binding" "$id_type")
-    
+
     if [ -n "$existing_id" ] && namespace_exists "$existing_id"; then
         echo "✅ Found existing $binding$display_suffix with ID: $existing_id" >&2
         echo "$existing_id"
         return 0
     fi
+
+    # If no existing ID in wrangler.toml, check if namespace exists in Cloudflare
+    echo "Checking for existing $name namespace in Cloudflare..." >&2
+    cloudflare_list=$(npx wrangler kv namespace list 2>/dev/null)
+
+    # For preview namespaces, check for the name with _preview suffix
+    check_name="$name"
+    if [ "$preview_flag" = "--preview" ]; then
+        check_name="${name}_preview"
+    fi
+
+    if echo "$cloudflare_list" | grep -q "\"title\": \"$check_name\""; then
+        # Extract the existing ID from Cloudflare using simpler approach
+        if [ "$preview_flag" = "--preview" ]; then
+            existing_id=$(echo "$cloudflare_list" | grep -B 5 -A 5 "\"title\": \"$check_name\"" | grep "\"id\":" | head -1 | sed 's/.*"id": "\([^"]*\)".*/\1/')
+        else
+            existing_id=$(echo "$cloudflare_list" | grep -B 5 -A 5 "\"title\": \"$check_name\"" | grep "\"id\":" | head -1 | sed 's/.*"id": "\([^"]*\)".*/\1/')
+        fi
+
+        if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+            echo "✅ Found existing $binding$display_suffix in Cloudflare with ID: $existing_id" >&2
+            echo "$existing_id"
+            return 0
+        fi
+    fi
     
     # Create new namespace
     echo "Creating new $binding$display_suffix namespace..." >&2
     if [ "$preview_flag" = "--preview" ]; then
-        output=$(npx wrangler kv namespace create "$name" --preview 2>/dev/null)
-        if [[ $output =~ preview_id\ =\ \"([^\"]+)\" ]]; then
+        output=$(npx wrangler kv namespace create "$name" --preview)
+        if [[ $output =~ \"preview_id\":\ \"([^\"]+)\" ]]; then
             new_id="${BASH_REMATCH[1]}"
             echo "✅ Created $binding$display_suffix with ID: $new_id" >&2
             echo "$new_id"
             return 0
         fi
     else
-        output=$(npx wrangler kv namespace create "$name" 2>/dev/null)
-        if [[ $output =~ id\ =\ \"([^\"]+)\" ]]; then
+        output=$(npx wrangler kv namespace create "$name")
+        if [[ $output =~ \"id\":\ \"([^\"]+)\" ]]; then
             new_id="${BASH_REMATCH[1]}"
             echo "✅ Created $binding with ID: $new_id" >&2
             echo "$new_id"

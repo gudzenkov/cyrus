@@ -26,6 +26,7 @@ preview_id = "{{WORKSPACE_METADATA_PREVIEW_ID}}"
 
 # Environment variables (use wrangler secret for production)
 [vars]
-OAUTH_REDIRECT_URI = "https://cyrus-proxy.open-ai-caching-proxy.workers.dev/oauth/callback"
+# OAUTH_REDIRECT_URI will be set dynamically from PROXY_URL environment variable
+# Format: ${PROXY_URL}/oauth/callback
 
 # Local development settings (for persistence, use --persist-to flag with wrangler dev)

@@ -108,7 +108,9 @@ npx wrangler kv key put <key> <value> --namespace-id <namespace-id>
 ### Environment Variables
 
 Set in `wrangler.toml` under `[vars]`:
-- `OAUTH_REDIRECT_URI`: OAuth callback URL
+- `PROXY_URL`: Your deployed worker URL (e.g., `https://your-worker.workers.dev`)
+
+**Note**: The OAuth redirect URI is automatically constructed as `${PROXY_URL}/oauth/callback`
 
 ### Secrets (Required)
 
