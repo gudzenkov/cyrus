@@ -45,9 +45,6 @@ Keep `cyrus` running, and the agent will start monitoring issues assigned to you
 
 ## Configuration
 
-<details>
-<summary>Click to expand configuration details</summary>
-
 After initial setup, Cyrus stores your configuration in `~/.cyrus/config.json`. You can edit this file to customize the following settings:
 
 ### Repository Configuration
@@ -233,10 +230,10 @@ When determining allowed tools, Cyrus follows this priority order:
 4. Global default allowed tools
 5. Safe tools fallback (all tools except Bash)
 
-</details>
-
 ## Setup on Remote Host
 
+<details>
+  
 If you want to host Cyrus on a remote machine for 24/7 availability, follow these steps on a newly created virtual machine to get started.
 
 1. Install `gh`, `npm`, and `git`
@@ -342,6 +339,8 @@ tmux new -s cyrus-session # Can name whatever you'd like
 # To later 'attach' to it again
 tmux attach -t cyrus-session
 ```
+</details>
+
 
 ## Repository Setup Script
 

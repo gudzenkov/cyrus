@@ -24,9 +24,24 @@ import open from "open";
 // Parse command line arguments
 const args = process.argv.slice(2);
 const envFileArg = args.find((arg) => arg.startsWith("--env-file="));
+const cyrusHomeArg = args.find((arg) => arg.startsWith("--cyrus-home="));
 
 // Constants
 const DEFAULT_PROXY_URL = "https://cyrus-proxy.ceedar.workers.dev";
+
+// Determine the Cyrus home directory once at startup
+let CYRUS_HOME: string;
+if (cyrusHomeArg) {
+	const customPath = cyrusHomeArg.split("=")[1];
+	if (customPath) {
+		CYRUS_HOME = resolve(customPath);
+	} else {
+		console.error("Error: --cyrus-home flag requires a directory path");
+		process.exit(1);
+	}
+} else {
+	CYRUS_HOME = resolve(homedir(), ".cyrus");
+}
 
 // Note: __dirname removed since version is now hardcoded
 
@@ -55,12 +70,14 @@ Options:
   --version          Show version number
   --help, -h         Show help
   --env-file=<path>  Load environment variables from file
+  --cyrus-home=<dir> Specify custom Cyrus config directory (default: ~/.cyrus)
 
 Examples:
   cyrus                          Start the edge worker
   cyrus check-tokens             Check all Linear token statuses
   cyrus refresh-token            Interactive token refresh
   cyrus add-repository           Add a new repository interactively
+  cyrus --cyrus-home=/tmp/cyrus  Use custom config directory
 `);
 	process.exit(0);
 }
@@ -83,6 +100,8 @@ interface EdgeConfig {
 	repositories: RepositoryConfig[];
 	ngrokAuthToken?: string;
 	stripeCustomerId?: string;
+	defaultModel?: string; // Default Claude model to use across all repositories
+	defaultFallbackModel?: string; // Default fallback model if primary model is unavailable
 }
 
 interface Workspace {
@@ -96,12 +115,17 @@ interface Workspace {
 class EdgeApp {
 	private edgeWorker: EdgeWorker | null = null;
 	private isShuttingDown = false;
+	private cyrusHome: string;
+
+	constructor(cyrusHome: string) {
+		this.cyrusHome = cyrusHome;
+	}
 
 	/**
 	 * Get the edge configuration file path
 	 */
 	getEdgeConfigPath(): string {
-		return resolve(homedir(), ".cyrus", "config.json");
+		return resolve(this.cyrusHome, "config.json");
 	}
 
 	/**
@@ -244,8 +268,7 @@ class EdgeApp {
 				.replace(/[^a-zA-Z0-9-_]/g, "-")
 				.toLowerCase();
 			const workspaceBaseDir = resolve(
-				homedir(),
-				".cyrus",
+				this.cyrusHome,
 				"workspaces",
 				repoNameSafe,
 			);
@@ -254,6 +277,7 @@ class EdgeApp {
 
 			// Set reasonable defaults for configuration
 			// Allowed tools - default to all tools except Bash, plus Bash(git:*) and Bash(gh:*)
+			// Note: MCP tools (mcp__linear, mcp__cyrus-mcp-tools) are automatically added by EdgeWorker
 			const allowedTools = [
 				"Read(**)",
 				"Edit(**)",
@@ -279,6 +303,10 @@ class EdgeApp {
 				},
 				scoper: {
 					labels: ["PRD"],
+				},
+				orchestrator: {
+					labels: ["Orchestrator"],
+					allowedTools: "coordinator" as const, // Uses coordinator tools (all except file editing)
 				},
 			};
 
@@ -453,8 +481,18 @@ class EdgeApp {
 		const config: EdgeWorkerConfig = {
 			proxyUrl,
 			repositories,
+			cyrusHome: this.cyrusHome,
 			defaultAllowedTools:
 				process.env.ALLOWED_TOOLS?.split(",").map((t) => t.trim()) || [],
+			defaultDisallowedTools:
+				process.env.DISALLOWED_TOOLS?.split(",").map((t) => t.trim()) ||
+				undefined,
+			// Model configuration: environment variables take precedence over config file
+			defaultModel:
+				process.env.CYRUS_DEFAULT_MODEL || this.loadEdgeConfig().defaultModel,
+			defaultFallbackModel:
+				process.env.CYRUS_DEFAULT_FALLBACK_MODEL ||
+				this.loadEdgeConfig().defaultFallbackModel,
 			webhookBaseUrl: process.env.CYRUS_BASE_URL,
 			serverPort: process.env.CYRUS_SERVER_PORT
 				? parseInt(process.env.CYRUS_SERVER_PORT, 10)
@@ -1067,11 +1105,15 @@ class EdgeApp {
 		} catch {
 			// Branch doesn't exist locally, check remote
 			try {
-				execSync(`git ls-remote --heads origin "${branchName}"`, {
-					cwd: repoPath,
-					stdio: "pipe",
-				});
-				return true;
+				const remoteOutput = execSync(
+					`git ls-remote --heads origin "${branchName}"`,
+					{
+						cwd: repoPath,
+						stdio: "pipe",
+					},
+				);
+				// Check if output is non-empty (branch actually exists on remote)
+				return remoteOutput && remoteOutput.toString().trim().length > 0;
 			} catch {
 				return false;
 			}
@@ -1260,12 +1302,59 @@ class EdgeApp {
 			let worktreeCmd: string;
 			if (createBranch) {
 				if (hasRemote) {
-					// Always prefer remote version if available
-					const remoteBranch = `origin/${baseBranch}`;
-					console.log(
-						`Creating git worktree at ${workspacePath} from ${remoteBranch}`,
-					);
-					worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${remoteBranch}"`;
+					// Check if the base branch exists remotely
+					let useRemoteBranch = false;
+					try {
+						const remoteOutput = execSync(
+							`git ls-remote --heads origin "${baseBranch}"`,
+							{
+								cwd: repository.repositoryPath,
+								stdio: "pipe",
+							},
+						);
+						// Check if output is non-empty (branch actually exists on remote)
+						useRemoteBranch =
+							remoteOutput && remoteOutput.toString().trim().length > 0;
+						if (!useRemoteBranch) {
+							console.log(
+								`Base branch '${baseBranch}' not found on remote, checking locally...`,
+							);
+						}
+					} catch {
+						// Base branch doesn't exist remotely, use local or fall back to default
+						console.log(
+							`Base branch '${baseBranch}' not found on remote, checking locally...`,
+						);
+					}
+
+					if (useRemoteBranch) {
+						// Use remote version of base branch
+						const remoteBranch = `origin/${baseBranch}`;
+						console.log(
+							`Creating git worktree at ${workspacePath} from ${remoteBranch}`,
+						);
+						worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${remoteBranch}"`;
+					} else {
+						// Check if base branch exists locally
+						try {
+							execSync(`git rev-parse --verify "${baseBranch}"`, {
+								cwd: repository.repositoryPath,
+								stdio: "pipe",
+							});
+							// Use local base branch
+							console.log(
+								`Creating git worktree at ${workspacePath} from local ${baseBranch}`,
+							);
+							worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${baseBranch}"`;
+						} catch {
+							// Base branch doesn't exist locally either, fall back to remote default
+							console.log(
+								`Base branch '${baseBranch}' not found locally, falling back to remote ${repository.baseBranch}`,
+							);
+							const defaultRemoteBranch = `origin/${repository.baseBranch}`;
+							worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${defaultRemoteBranch}"`;
+						}
+					}
 				} else {
 					// No remote, use local branch
 					console.log(
@@ -1421,7 +1510,7 @@ async function checkLinearToken(
 
 // Command: check-tokens
 async function checkTokensCommand() {
-	const app = new EdgeApp();
+	const app = new EdgeApp(CYRUS_HOME);
 	const configPath = app.getEdgeConfigPath();
 
 	if (!existsSync(configPath)) {
@@ -1447,7 +1536,7 @@ async function checkTokensCommand() {
 
 // Command: refresh-token
 async function refreshTokenCommand() {
-	const app = new EdgeApp();
+	const app = new EdgeApp(CYRUS_HOME);
 	const configPath = app.getEdgeConfigPath();
 
 	if (!existsSync(configPath)) {
@@ -1602,7 +1691,7 @@ async function refreshTokenCommand() {
 
 // Command: add-repository
 async function addRepositoryCommand() {
-	const app = new EdgeApp();
+	const app = new EdgeApp(CYRUS_HOME);
 
 	console.log("📋 Add New Repository");
 	console.log("─".repeat(50));
@@ -1670,7 +1759,7 @@ async function addRepositoryCommand() {
 
 // Command: set-customer-id
 async function setCustomerIdCommand() {
-	const app = new EdgeApp();
+	const app = new EdgeApp(CYRUS_HOME);
 	const configPath = app.getEdgeConfigPath();
 
 	// Get customer ID from command line args
@@ -1722,7 +1811,7 @@ async function setCustomerIdCommand() {
 
 // Command: billing
 async function billingCommand() {
-	const app = new EdgeApp();
+	const app = new EdgeApp(CYRUS_HOME);
 	const configPath = app.getEdgeConfigPath();
 
 	if (!existsSync(configPath)) {
@@ -1816,7 +1905,7 @@ switch (command) {
 
 	default: {
 		// Create and start the app
-		const app = new EdgeApp();
+		const app = new EdgeApp(CYRUS_HOME);
 		app.start().catch((error) => {
 			console.error("Fatal error:", error);
 			process.exit(1);
