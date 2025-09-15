@@ -251,7 +251,7 @@ export class EdgeWorker extends EventEmitter {
 
 			// Determine which client to use based on environment variable
 			const useLinearDirectWebhooks =
-				process.env.LINEAR_DIRECT_WEBHOOKS === "true";
+				process.env.LINEAR_DIRECT_WEBHOOKS?.toLowerCase().trim() === "true";
 
 			const clientConfig = {
 				proxyUrl: config.proxyUrl,
