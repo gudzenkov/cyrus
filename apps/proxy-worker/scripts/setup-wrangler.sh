@@ -5,12 +5,63 @@
 
 set -e  # Exit on any error
 
+# Parse command line arguments
+RUN_DEV=false
+RUN_DEPLOY=false
+RUN_PREVIEW=false
+FORCE_SECRETS=false
+
+for arg in "$@"; do
+    case $arg in
+        --dev)
+            RUN_DEV=true
+            shift
+            ;;
+        --deploy)
+            RUN_DEPLOY=true
+            shift
+            ;;
+        --preview)
+            RUN_PREVIEW=true
+            shift
+            ;;
+        --force-secrets)
+            FORCE_SECRETS=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --dev            Run development server after setup"
+            echo "  --deploy         Deploy to production after setup"
+            echo "  --preview        Upload preview version and get preview URL"
+            echo "  --force-secrets  Force update all secrets even if they exist"
+            echo "  --help, -h       Show this help message"
+            echo ""
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg"
+            echo "Use --help for available options"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🚀 Setting up Wrangler workspace for Cyrus Proxy Worker..."
 
 # Check if we're in the right directory
 if [ ! -f "wrangler.toml.template" ]; then
     echo "❌ Error: wrangler.toml.template not found. Please run this script from the proxy-worker directory."
     exit 1
+fi
+
+# Source .env file if it exists to load environment variables
+if [ -f ".env" ]; then
+    echo "📋 Sourcing environment variables from .env file..."
+    source .env
+    echo "✅ Environment variables loaded from .env"
 fi
 
 # Check if wrangler is available
@@ -29,8 +80,8 @@ echo "✅ Wrangler authentication verified."
 
 # Check for PROXY_URL and validate
 if [ -z "$PROXY_URL" ]; then
-    echo "⚠️  PROXY_URL not set. OAuth will use default redirect URI."
-    echo "   For custom deployments, set: export PROXY_URL=https://your-worker.workers.dev"
+    echo "⚠️  PROXY_URL not set - will use DEFAULT_PROXY_URL=https://cyrus-proxy.ceedar.workers.dev"
+    echo "   For custom deployments, set: export PROXY_URL=https://your-worker.your-domain.workers.dev"
     echo ""
 else
     echo "✅ PROXY_URL detected: $PROXY_URL"
@@ -47,7 +98,7 @@ echo "🗂️  Checking and creating KV namespaces..."
 get_existing_namespace_id() {
     local binding="$1"
     local type="$2"  # "id" or "preview_id"
-    
+
     if [ -f "wrangler.toml" ]; then
         awk -v binding="$binding" -v type="$type" '
         /^\[\[kv_namespaces\]\]/ { in_kv = 1; found_binding = 0; next }
@@ -71,7 +122,7 @@ namespace_exists() {
     if [ -z "$namespace_id" ]; then
         return 1
     fi
-    
+
     npx wrangler kv namespace list 2>/dev/null | grep -q "$namespace_id"
 }
 
@@ -123,7 +174,7 @@ setup_namespace() {
             return 0
         fi
     fi
-    
+
     # Create new namespace
     echo "Creating new $binding$display_suffix namespace..." >&2
     if [ "$preview_flag" = "--preview" ]; then
@@ -143,7 +194,7 @@ setup_namespace() {
             return 0
         fi
     fi
-    
+
     echo "❌ Failed to create $binding$display_suffix namespace" >&2
     return 1
 }
@@ -210,6 +261,14 @@ sed -i.bak "s|{{EDGE_TOKENS_PREVIEW_ID}}|$edge_tokens_preview_id|g" "$temp_file"
 sed -i.bak "s|{{WORKSPACE_METADATA_ID}}|$workspace_metadata_id|g" "$temp_file"
 sed -i.bak "s|{{WORKSPACE_METADATA_PREVIEW_ID}}|$workspace_metadata_preview_id|g" "$temp_file"
 
+# Replace PROXY_URL if available, otherwise remove the line
+if [ -n "$PROXY_URL" ]; then
+    sed -i.bak "s|{{PROXY_URL}}|$PROXY_URL|g" "$temp_file"
+else
+    # Remove the PROXY_URL line if not set (will use DEFAULT_PROXY_URL)
+    sed -i.bak "/{{PROXY_URL}}/d" "$temp_file"
+fi
+
 # Move the processed file to wrangler.toml
 mv "$temp_file" wrangler.toml
 rm -f "$temp_file.bak"
@@ -227,30 +286,200 @@ if [ -f "wrangler.toml.backup" ]; then
     echo "  - Backup saved as wrangler.toml.backup"
 fi
 echo ""
-echo "⚠️  IMPORTANT: You must now configure the required secrets!"
+echo "🔐 Configuring secrets..."
 echo ""
-echo "🔐 Required Secrets Setup:"
-echo "  1. Create a Linear OAuth app at:"
-echo "     https://linear.app/settings/api/applications/new"
-echo "     - Enable webhooks and select 'Agent session events'"
-echo "     - Copy Client ID, Client Secret, and Webhook Secret"
+
+# Check environment variables
+check_env_vars() {
+    echo "📋 Checking environment variables..."
+
+    local found_vars=0
+
+    if [ -n "$LINEAR_CLIENT_ID" ]; then
+        echo "✅ LINEAR_CLIENT_ID found"
+        found_vars=$((found_vars + 1))
+    fi
+
+    if [ -n "$LINEAR_CLIENT_SECRET" ]; then
+        echo "✅ LINEAR_CLIENT_SECRET found"
+        found_vars=$((found_vars + 1))
+    fi
+
+    if [ -n "$LINEAR_WEBHOOK_SECRET" ]; then
+        echo "✅ LINEAR_WEBHOOK_SECRET found"
+        found_vars=$((found_vars + 1))
+    fi
+
+    if [ -n "$ENCRYPTION_KEY" ]; then
+        echo "✅ ENCRYPTION_KEY found"
+        found_vars=$((found_vars + 1))
+    fi
+
+    echo "Found $found_vars out of 4 required environment variables"
+}
+
+# Check environment variables
+check_env_vars
+
+# Generate encryption key if not provided
+generate_encryption_key() {
+    if [ -z "$ENCRYPTION_KEY" ]; then
+        echo "🔑 Generating encryption key..."
+        ENCRYPTION_KEY=$(openssl rand -hex 32)
+        if [ $? -eq 0 ]; then
+            echo "✅ Generated 32-byte encryption key"
+
+            # Append to .env file
+            echo "" >> .env
+            echo "# Auto-generated encryption key" >> .env
+            echo "export ENCRYPTION_KEY=\"$ENCRYPTION_KEY\"" >> .env
+            echo "💾 Saved encryption key to .env file"
+        else
+            echo "❌ Failed to generate encryption key. Please install openssl."
+            echo "   Alternative: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+            exit 1
+        fi
+    else
+        echo "✅ Using existing ENCRYPTION_KEY from environment"
+    fi
+}
+
+# Function to check if secret exists (returns "exists" or empty)
+get_current_secret() {
+    local secret_name="$1"
+    local secret_list=$(npx wrangler secret list 2>/dev/null)
+
+    if echo "$secret_list" | grep -q "\"name\": \"$secret_name\""; then
+        echo "exists"
+    else
+        echo ""
+    fi
+}
+
+# Function to set a secret only if it's different or missing
+set_secret_if_changed() {
+    local secret_name="$1"
+    local env_var_name="$2"
+    local env_value="${!env_var_name}"
+
+    if [ -n "$env_value" ]; then
+        # Check if secret exists
+        local current_secret=$(get_current_secret "$secret_name")
+
+        if [ -n "$current_secret" ] && [ "$FORCE_SECRETS" != true ]; then
+            echo "ℹ️  $secret_name already exists - skipping (use --force-secrets to override)"
+            secrets_skipped=$((secrets_skipped + 1))
+        else
+            echo "🔒 Setting $secret_name..."
+            if echo "$env_value" | npx wrangler secret put "$secret_name" >/dev/null 2>&1; then
+                echo "✅ Set $secret_name"
+                secrets_set=$((secrets_set + 1))
+            else
+                echo "❌ Failed to set $secret_name"
+                echo "   This might require deploying the worker first"
+                secrets_failed+=("$secret_name")
+            fi
+        fi
+    else
+        echo "⚠️  $env_var_name not found in environment - skipping $secret_name"
+        secrets_failed+=("$secret_name")
+    fi
+}
+
+# Generate encryption key if needed
+generate_encryption_key
+
+# Track which secrets were set successfully
+secrets_set=0
+secrets_failed=()
+secrets_skipped=0
+
+# Set secrets from environment variables (only if changed/missing)
+echo "🔒 Configuring secrets from environment variables..."
+
+# Process each secret (function handles counting internally)
+set_secret_if_changed "LINEAR_CLIENT_ID" "LINEAR_CLIENT_ID"
+set_secret_if_changed "LINEAR_CLIENT_SECRET" "LINEAR_CLIENT_SECRET"
+set_secret_if_changed "LINEAR_WEBHOOK_SECRET" "LINEAR_WEBHOOK_SECRET"
+set_secret_if_changed "ENCRYPTION_KEY" "ENCRYPTION_KEY"
+
 echo ""
-echo "  2. Generate an encryption key:"
-echo "     openssl rand -hex 32"
+
+# Report results
+total_configured=$((secrets_set + secrets_skipped))
+
+if [ $total_configured -eq 4 ]; then
+    echo "🎉 All secrets are configured!"
+    if [ $secrets_skipped -gt 0 ]; then
+        echo "   ($secrets_skipped already existed, $secrets_set newly set)"
+    fi
+    echo ""
+    echo "🚀 Ready to deploy! Choose your next step:"
+    echo ""
+    echo "  Development mode:"
+    echo "    npm run dev"
+    echo "    # or: npx wrangler dev --port 8787"
+    echo ""
+    echo "  Deploy to production:"
+    echo "    npm run deploy"
+    echo "    # or: npx wrangler deploy"
+    echo ""
+    echo "  Create preview version (test without affecting production):"
+    echo "    npm run preview"
+    echo "    # or: npx wrangler versions upload"
+    echo ""
+elif [ $total_configured -gt 0 ]; then
+    echo "✅ Secrets configured: $secrets_set newly set, $secrets_skipped already existed"
+
+    if [ ${#secrets_failed[@]} -gt 0 ]; then
+        echo "⚠️  Failed secrets: ${secrets_failed[*]}"
+        echo ""
+        echo "🔐 To set the missing secrets manually:"
+        for secret in "${secrets_failed[@]}"; do
+            echo "    npx wrangler secret put $secret"
+        done
+    fi
+else
+    echo "⚠️  No secrets were set automatically"
+    echo ""
+    echo "🔐 Manual secret setup required:"
+    echo ""
+    echo "  1. Create a Linear OAuth app at:"
+    echo "     https://linear.app/settings/api/applications/new"
+    echo "     - Enable webhooks and select 'Agent session events'"
+    echo "     - Copy Client ID, Client Secret, and Webhook Secret"
+    echo ""
+    echo "  2. Set the secrets using these commands:"
+    echo "     npx wrangler secret put LINEAR_CLIENT_ID"
+    echo "     npx wrangler secret put LINEAR_CLIENT_SECRET"
+    echo "     npx wrangler secret put LINEAR_WEBHOOK_SECRET"
+    echo "     npx wrangler secret put ENCRYPTION_KEY"
+    echo ""
+    echo "     For preview environment, add --env preview to each command"
+fi
+
 echo ""
-echo "  3. Set the secrets using these commands:"
-echo "     npx wrangler secret put LINEAR_CLIENT_ID"
-echo "     npx wrangler secret put LINEAR_CLIENT_SECRET"
-echo "     npx wrangler secret put LINEAR_WEBHOOK_SECRET"
-echo "     npx wrangler secret put ENCRYPTION_KEY"
-echo ""
-echo "     For preview environment, add --env preview to each command"
-echo ""
-echo "🚀 After setting secrets:"
-echo "  - Run 'npm run dev' to start development"
-echo "  - Run 'npm run deploy' to deploy to production"
-echo "  - Run 'npx wrangler kv namespace list' to see all namespaces"
+echo "📊 Useful Commands:"
+echo "  - View logs: npm run tail (or npx wrangler tail)"
+echo "  - List namespaces: npx wrangler kv namespace list"
+echo "  - List secrets: npx wrangler secret list"
+echo "  - View worker info: npx wrangler whoami"
 echo ""
 echo "💡 Tip: If you encounter 'There is already a user in Linear associated with this Github account',"
 echo "   you may need to create a new GitHub username for your Linear agent."
 echo ""
+
+# Execute requested action based on CLI arguments
+if [ "$RUN_DEV" = true ]; then
+    echo "🚀 Starting development server..."
+    echo ""
+    exec npm run dev
+elif [ "$RUN_DEPLOY" = true ]; then
+    echo "🚀 Deploying to production..."
+    echo ""
+    exec npm run deploy
+elif [ "$RUN_PREVIEW" = true ]; then
+    echo "🚀 Uploading preview version..."
+    echo ""
+    exec npm run preview
+fi
