@@ -144,6 +144,7 @@ export class ClaudeRunner extends EventEmitter {
 	private logStream: WriteStream | null = null;
 	private readableLogStream: WriteStream | null = null;
 	private messages: SDKMessage[] = [];
+	private lastMessage: SDKMessage | null = null;
 	private streamingPrompt: StreamingPrompt | null = null;
 	private cyrusHome: string;
 	private pendingRetryTimer: NodeJS.Timeout | null = null;
@@ -236,7 +237,7 @@ export class ClaudeRunner extends EventEmitter {
 		// Set up logging (initial setup without session ID)
 		this.setupLogging();
 
-			// Create abort controller for this session
+		// Create abort controller for this session
 		this.abortController = new AbortController();
 
 		// Reset messages array
@@ -409,6 +410,7 @@ export class ClaudeRunner extends EventEmitter {
 				}
 
 				this.messages.push(message);
+				this.lastMessage = message;
 
 				// Log to detailed JSON log
 				if (this.logStream) {
@@ -445,8 +447,6 @@ export class ClaudeRunner extends EventEmitter {
 			this.sessionInfo.isRunning = false;
 			this.emit("complete", this.messages);
 		} catch (error) {
-			console.error("[ClaudeRunner] Session error:", error);
-
 			if (this.sessionInfo) {
 				this.sessionInfo.isRunning = false;
 			}
@@ -462,28 +462,41 @@ export class ClaudeRunner extends EventEmitter {
 				console.log(
 					"[ClaudeRunner] Session was terminated gracefully (SIGTERM)",
 				);
-			} else if (
-				error instanceof Error &&
-				/usage limit reached/i.test(error.message)
-			) {
-				retryPromise = this.handleUsageLimitRetry(
-					error,
-					stringPrompt,
-					streamingInitialPrompt,
-				);
-				if (!retryPromise) {
+			} else {
+				// Check for usage limit message using type-safe extraction
+				const usageLimitMessage = this.extractUsageLimitMessage(error);
+
+				if (usageLimitMessage) {
+					console.log(
+						"[ClaudeRunner] Usage limit detected in message:",
+						usageLimitMessage,
+					);
+					retryPromise = this.handleUsageLimitRetry(
+						usageLimitMessage,
+						stringPrompt,
+						streamingInitialPrompt,
+					);
+					if (!retryPromise) {
+						console.log(
+							"[ClaudeRunner] Failed to parse reset time, emitting error",
+						);
+						this.emit(
+							"error",
+						error instanceof Error ? error : new Error(String(error)),
+						);
+					} else {
+						console.log(
+							"[ClaudeRunner] Usage limit retry scheduled successfully",
+						);
+					}
+				} else {
+					// Only log raw error as final fallback
+					console.error("[ClaudeRunner] Session error:", error);
 					this.emit(
 						"error",
-						error instanceof Error
-							? error
-							: new Error(String(error)),
+						error instanceof Error ? error : new Error(String(error)),
 					);
 				}
-			} else {
-				this.emit(
-					"error",
-					error instanceof Error ? error : new Error(String(error)),
-				);
 			}
 		} finally {
 			// Clean up
@@ -513,20 +526,69 @@ export class ClaudeRunner extends EventEmitter {
 	}
 
 	/**
+	 * Extract usage limit message from various sources
+	 */
+	private extractUsageLimitMessage(error: unknown): string | null {
+		const sources = [
+			// Check error message first
+			error instanceof Error ? error.message : null,
+			// Check last message if it's a result type
+			this.lastMessage?.type === "result" ?
+				this.getResultMessageContent(this.lastMessage) : null,
+			// Check if error contains usage limit info in cause
+			error instanceof Error && error.cause ?
+				String(error.cause) : null,
+		].filter((source): source is string =>
+			typeof source === "string" && /limit reached/i.test(source)
+		);
+
+		return sources.length > 0 ? sources[0]! : null;
+	}
+
+	/**
+	 * Safely extract content from result message
+	 */
+	private getResultMessageContent(message: SDKMessage): string | null {
+		if (message.type === "result" && "result" in message) {
+			// TypeScript doesn't know the exact structure, so we safely extract
+			const result = (message as any).result;
+			return typeof result === "string" ? result : null;
+		}
+		return null;
+	}
+
+	/**
 	 * Handle usage limit retry logic
 	 */
 	private handleUsageLimitRetry(
-		error: Error,
+		usageLimitMessage: string,
 		stringPrompt: string | null | undefined,
 		streamingInitialPrompt?: string,
 	): Promise<ClaudeSessionInfo> | null {
+		const resultContent = usageLimitMessage;
+
 		// More robust regex pattern to handle various time formats
-		const timeMatch = error.message.match(
-			/reset at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+		let timeMatch = resultContent.match(
+			/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
 		);
 
+		// Also try pattern without space before am/pm for formats like "8pm"
+		if (!timeMatch) {
+			timeMatch = resultContent.match(
+				/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?(am|pm)/i,
+			);
+		}
+
+		// Fallback: look for any time pattern in the message if resets pattern fails
+		if (!timeMatch) {
+			timeMatch = resultContent.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+		}
+
 		if (!timeMatch || !timeMatch[1] || !timeMatch[3]) {
-			console.error("[ClaudeRunner] Could not parse reset time from usage limit error");
+			console.log(
+				"[ClaudeRunner] Could not parse reset time from usage limit message:",
+				resultContent,
+			);
 			return null;
 		}
 
@@ -573,10 +635,7 @@ export class ClaudeRunner extends EventEmitter {
 				return this.sessionInfo as ClaudeSessionInfo;
 			}
 			this.pendingRetryTimer = null;
-			return this.startWithPrompt(
-				stringPrompt ?? null,
-				streamingInitialPrompt,
-			);
+			return this.startWithPrompt(stringPrompt ?? null, streamingInitialPrompt);
 		});
 	}
 
