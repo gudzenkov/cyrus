@@ -26,6 +26,7 @@ preview_id = "{{WORKSPACE_METADATA_PREVIEW_ID}}"
 
 # Environment variables (use wrangler secret for production)
 [vars]
+PROXY_URL = "{{PROXY_URL}}"
 # OAUTH_REDIRECT_URI will be set dynamically from PROXY_URL environment variable
 # Format: ${PROXY_URL}/oauth/callback
 

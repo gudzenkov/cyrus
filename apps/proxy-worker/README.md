@@ -10,14 +10,24 @@ A Cloudflare Worker that serves as an edge proxy for the Cyrus Linear Agent, han
 # Make sure you're authenticated with Cloudflare
 npx wrangler login
 
-# Run the automated setup script
+# Run the fully automated setup script
 ./scripts/setup-wrangler.sh
+
+# Or combine setup with immediate action:
+./scripts/setup-wrangler.sh --dev            # Setup + start dev server
+./scripts/setup-wrangler.sh --deploy         # Setup + deploy to production
+./scripts/setup-wrangler.sh --preview        # Setup + create preview version
+./scripts/setup-wrangler.sh --force-secrets  # Force update all secrets
 ```
 
 That's it! The script will:
 - Create all required KV namespaces (production + preview)
 - Update `wrangler.toml` with the correct namespace IDs
 - Create a backup of your existing configuration
+- Load secrets from `.env` file if available
+- Generate encryption key automatically if missing
+- Deploy all secrets to both production and preview environments
+- Provide clear next-step commands
 
 ### Manual Setup
 
@@ -71,6 +81,22 @@ npm run deploy
 npx wrangler deploy
 ```
 
+### Create Preview Version
+```bash
+npm run preview
+# or
+npx wrangler versions upload
+```
+
+This uploads a new version and returns a preview URL for testing without affecting production.
+
+**Note**: Each preview upload creates a new version. You can manage versions with:
+```bash
+npx wrangler versions list                    # List all versions
+npx wrangler versions view <version-id>       # View specific version
+npx wrangler versions deploy <version-id>     # Promote version to production
+```
+
 ### View Logs
 ```bash
 npm run tail
@@ -107,10 +133,40 @@ npx wrangler kv key put <key> <value> --namespace-id <namespace-id>
 
 ### Environment Variables
 
-Set in `wrangler.toml` under `[vars]`:
-- `PROXY_URL`: Your deployed worker URL (e.g., `https://your-worker.workers.dev`)
+For automated setup, create a `.env` file with your configuration:
+
+```bash
+# Copy the example file and customize it
+cp .env.example .env
+# Edit .env with your actual values
+```
+
+Or export the variables directly:
+
+```bash
+# Your deployed worker URL (required)
+export PROXY_URL=https://your-worker.workers.dev
+
+# Linear OAuth credentials (from Linear app settings)
+export LINEAR_CLIENT_ID=your_linear_client_id
+export LINEAR_CLIENT_SECRET=your_linear_client_secret
+export LINEAR_WEBHOOK_SECRET=your_linear_webhook_secret
+
+# Encryption key (32-byte hex) - will be auto-generated if not provided
+export ENCRYPTION_KEY=your_32_byte_hex_encryption_key
+```
+
+Then source your `.env` file:
+```bash
+source .env  # then run the setup script
+```
 
 **Note**: The OAuth redirect URI is automatically constructed as `${PROXY_URL}/oauth/callback`
+
+### Wrangler Configuration
+
+Set in `wrangler.toml` under `[vars]`:
+- `PROXY_URL`: Your deployed worker URL (auto-configured during setup)
 
 ### Secrets (Required)
 
@@ -168,7 +224,7 @@ This will:
 - `./scripts/cleanup-wrangler.sh` - Clean up all resources
 - `npm run dev` - Start development server
 - `npm run deploy` - Deploy to production
-- `npm run preview` - Deploy to preview environment
+- `npm run preview` - Upload preview version (returns preview URL)
 - `npm run tail` - View real-time logs
 - `npm run typecheck` - Run TypeScript type checking
 
@@ -181,6 +237,7 @@ proxy-worker/
 ├── scripts/
 │   ├── setup-wrangler.sh # Automated setup
 │   └── cleanup-wrangler.sh # Cleanup script
+├── .env.example          # Environment variables template
 ├── wrangler.toml         # Cloudflare Worker configuration
 ├── package.json          # Node.js dependencies and scripts
 └── tsconfig.json         # TypeScript configuration

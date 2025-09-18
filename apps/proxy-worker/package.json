@@ -7,7 +7,7 @@
 	"scripts": {
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
-		"preview": "wrangler preview",
+		"preview": "wrangler versions upload",
 		"tail": "wrangler tail",
 		"typecheck": "tsc --noEmit",
 		"setup": "./scripts/setup-wrangler.sh",
