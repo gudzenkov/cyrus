@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { URL } from "node:url";
 import { forward } from "@ngrok/ngrok";
+import { DEFAULT_PROXY_URL } from "cyrus-core";
 
 /**
  * OAuth callback handler interface
@@ -70,10 +71,7 @@ export class SharedApplicationServer {
 		this.port = port;
 		this.host = host;
 		this.ngrokAuthToken = ngrokAuthToken || null;
-		this.proxyUrl =
-			proxyUrl ||
-			process.env.PROXY_URL ||
-			"https://cyrus-proxy.ceedar.workers.dev";
+		this.proxyUrl = proxyUrl || process.env.PROXY_URL || DEFAULT_PROXY_URL;
 	}
 
 	/**
