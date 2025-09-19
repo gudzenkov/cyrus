@@ -1,0 +1,60 @@
+{
+  "name": "Cyrus Development Environment",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-20-bullseye",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-typescript-next",
+        "bradlc.vscode-tailwindcss",
+        "esbenp.prettier-vscode",
+        "biomejs.biome",
+        "ms-vscode.vscode-json",
+        "redhat.vscode-yaml",
+        "ms-vscode.hexeditor"
+      ],
+      "settings": {
+        "typescript.preferences.preferTypeOnlyAutoImports": true,
+        "editor.defaultFormatter": "biomejs.biome",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "explicit"
+        }
+      }
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "forwardPorts": [3456, 5173, 3000],
+  "portsAttributes": {
+    "3456": {
+      "label": "Cyrus Server",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "Vite Dev Server",
+      "onAutoForward": "openBrowser"
+    },
+    "3000": {
+      "label": "App Dev Server",
+      "onAutoForward": "openBrowser"
+    }
+  },
+
+  "remoteEnv": {
+    "CYRUS_DEV_CONTAINER": "true",
+    "NODE_ENV": "development"
+  },
+
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/data,target=/workspaces/data,type=bind",
+    "source=cyrus-node-modules,target=/workspaces/cyrus/node_modules,type=volume"
+  ]
+}

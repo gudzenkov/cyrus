@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  cyrus-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ../..:/workspaces/cyrus:cached
+      - cyrus-data:/workspaces/data
+      - cyrus-node-modules:/workspaces/cyrus/node_modules
+    environment:
+      - CYRUS_DEV_CONTAINER=true
+      - NODE_ENV=development
+    ports:
+      - "3456:3456"  # Cyrus server
+      - "5173:5173"  # Vite dev server
+      - "3000:3000"  # App dev server
+    command: sleep infinity
+    networks:
+      - cyrus-network
+
+volumes:
+  cyrus-data:
+    driver: local
+  cyrus-node-modules:
+    driver: local
+
+networks:
+  cyrus-network:
+    driver: bridge

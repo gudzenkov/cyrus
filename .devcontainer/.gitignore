@@ -1,0 +1,11 @@
+# DevContainer data and logs
+data/
+*.log
+
+# Local environment files
+local.env
+.env.local
+
+# Temporary files
+tmp/
+temp/
