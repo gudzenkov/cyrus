@@ -482,7 +482,7 @@ export class ClaudeRunner extends EventEmitter {
 						);
 						this.emit(
 							"error",
-						error instanceof Error ? error : new Error(String(error)),
+							error instanceof Error ? error : new Error(String(error)),
 						);
 					} else {
 						console.log(
@@ -533,13 +533,14 @@ export class ClaudeRunner extends EventEmitter {
 			// Check error message first
 			error instanceof Error ? error.message : null,
 			// Check last message if it's a result type
-			this.lastMessage?.type === "result" ?
-				this.getResultMessageContent(this.lastMessage) : null,
+			this.lastMessage?.type === "result"
+				? this.getResultMessageContent(this.lastMessage)
+				: null,
 			// Check if error contains usage limit info in cause
-			error instanceof Error && error.cause ?
-				String(error.cause) : null,
-		].filter((source): source is string =>
-			typeof source === "string" && /limit reached/i.test(source)
+			error instanceof Error && error.cause ? String(error.cause) : null,
+		].filter(
+			(source): source is string =>
+				typeof source === "string" && /limit reached/i.test(source),
 		);
 
 		return sources.length > 0 ? sources[0]! : null;

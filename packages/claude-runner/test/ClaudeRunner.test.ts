@@ -475,6 +475,8 @@ describe("ClaudeRunner", () => {
 			mockQuery
 				.mockImplementationOnce(async function* () {
 					throw usageError;
+					// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+					yield;
 				})
 				.mockImplementationOnce(async function* () {
 					yield {
@@ -507,6 +509,8 @@ describe("ClaudeRunner", () => {
 
 			mockQuery.mockImplementation(async function* () {
 				throw malformedError;
+				// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+				yield;
 			});
 
 			await runner.start("test");
@@ -523,6 +527,8 @@ describe("ClaudeRunner", () => {
 
 			mockQuery.mockImplementation(async function* () {
 				throw noTimeError;
+				// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+				yield;
 			});
 
 			await runner.start("test");
@@ -542,6 +548,8 @@ describe("ClaudeRunner", () => {
 			mockQuery
 				.mockImplementationOnce(async function* () {
 					throw usageError;
+					// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+					yield;
 				})
 				.mockImplementationOnce(async function* () {
 					yield {
@@ -575,6 +583,8 @@ describe("ClaudeRunner", () => {
 			mockQuery
 				.mockImplementationOnce(async function* () {
 					throw usageError;
+					// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+					yield;
 				})
 				.mockImplementationOnce(async function* () {
 					yield {
@@ -608,6 +618,8 @@ describe("ClaudeRunner", () => {
 			mockQuery
 				.mockImplementationOnce(async function* () {
 					throw usageError;
+					// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+					yield;
 				})
 				.mockImplementationOnce(async function* () {
 					yield {
@@ -642,6 +654,8 @@ describe("ClaudeRunner", () => {
 			mockQuery
 				.mockImplementationOnce(async function* () {
 					throw usageError;
+					// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+					yield;
 				})
 				.mockImplementationOnce(async function* () {
 					yield {
@@ -689,6 +703,8 @@ describe("ClaudeRunner", () => {
 			mockQuery
 				.mockImplementationOnce(async function* () {
 					throw usageError;
+					// biome-ignore lint/correctness/noUnreachable: Unreachable yield for generator compliance
+					yield;
 				})
 				.mockImplementationOnce(async function* () {
 					yield {
