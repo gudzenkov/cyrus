@@ -13,6 +13,10 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      '@linear/sdk':
+        specifier: 58.0.0
+        version: 58.0.0(encoding@0.1.13)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.1.3
