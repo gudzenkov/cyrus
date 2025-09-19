@@ -43,6 +43,139 @@ cyrus
 
 Keep `cyrus` running, and the agent will start monitoring issues assigned to you in Linear and process them automatically, on your very own device.
 
+## Self-Hosted Linear App Setup
+
+For users who prefer to host their own Linear OAuth application and webhook infrastructure instead of using the managed Cyrus Pro service, you can set up a self-hosted environment.
+
+### Option 1: CloudFlare Worker Proxy (Recommended)
+
+The CloudFlare Worker approach provides a persistent, always-available proxy for OAuth callbacks and webhooks, making it ideal for development and production environments.
+
+#### 1. Create Linear OAuth Application
+
+1. Go to [Linear Developer Settings](https://linear.app/settings/api/applications/new)
+2. Create a new OAuth application with these settings:
+   - **Name**: "Cyrus Self-Hosted" (or your preferred name)
+   - **Description**: "Self-hosted AI development agent for Linear"
+   - **OAuth Redirect URI**: `https://your-worker-name.workers.dev/oauth/callback`
+   - **Webhook URL**: `https://your-worker-name.workers.dev/webhook`
+   - **Enable Webhooks**: Yes
+   - **Webhook Events**: Select "Agent session events" and "Inbox notifications"
+3. Save the application and copy:
+   - Client ID
+   - Client Secret
+   - Webhook Secret
+
+#### 2. Deploy CloudFlare Worker
+
+Navigate to the proxy-worker directory:
+
+```bash
+cd apps/proxy-worker
+```
+
+Create environment configuration:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your Linear credentials:
+
+```env
+PROXY_URL=https://your-worker-name.workers.dev
+LINEAR_CLIENT_ID=your_linear_client_id
+LINEAR_CLIENT_SECRET=your_linear_client_secret
+LINEAR_WEBHOOK_SECRET=your_linear_webhook_secret
+ENCRYPTION_KEY=  # Will be auto-generated if not provided
+```
+
+Authenticate with CloudFlare and deploy:
+
+```bash
+# Authenticate with CloudFlare
+npx wrangler login
+
+# Run automated setup and deployment
+./scripts/setup-wrangler.sh --deploy
+```
+
+The setup script will:
+- Create all required KV namespaces (production + preview)
+- Update `wrangler.toml` with correct namespace IDs
+- Generate encryption keys automatically
+- Deploy secrets to CloudFlare
+- Deploy the worker
+
+#### 3. Configure Cyrus CLI
+
+In your main Cyrus directory, create or edit `.env`:
+
+```env
+# Use your CloudFlare proxy for OAuth and webhooks
+export PROXY_URL=https://your-worker-name.workers.dev
+
+# Optional: Configure Claude models
+export CYRUS_DEFAULT_MODEL=sonnet
+export CYRUS_DEFAULT_FALLBACK_MODEL=haiku
+```
+
+Then source the environment:
+
+```bash
+source .env
+cyrus
+```
+
+### Option 2: ngrok for Local Development
+
+For temporary local development, you can use ngrok to expose your local server:
+
+#### 1. Set up ngrok
+
+```bash
+# Install ngrok
+brew install ngrok  # or download from ngrok.com
+
+# Start tunnel (requires paid plan for reserved subdomain)
+ngrok http 3456 --subdomain=your-subdomain
+```
+
+#### 2. Configure Cyrus
+
+Create `.env` in your Cyrus directory:
+
+```env
+# Local development with ngrok
+export CYRUS_BASE_URL=https://your-subdomain.ngrok-free.app
+export CYRUS_SERVER_PORT=3456
+export LINEAR_DIRECT_WEBHOOKS=true
+export LINEAR_CLIENT_ID=your_linear_client_id
+export LINEAR_CLIENT_SECRET=your_linear_client_secret
+export LINEAR_WEBHOOK_SECRET=your_linear_webhook_secret
+```
+
+#### 3. Update Linear OAuth Application
+
+Update your Linear OAuth application settings:
+- **OAuth Redirect URI**: `https://your-subdomain.ngrok-free.app/oauth/callback`
+- **Webhook URL**: `https://your-subdomain.ngrok-free.app/webhook`
+
+### Option 3: Self-Hosted Server
+
+For production self-hosting on your own server:
+
+```env
+# Self-hosted on remote server
+export CYRUS_BASE_URL=https://your-domain.com
+export CYRUS_SERVER_PORT=3456
+export CYRUS_HOST_EXTERNAL=true  # Listen on 0.0.0.0
+export LINEAR_DIRECT_WEBHOOKS=true
+export LINEAR_CLIENT_ID=your_linear_client_id
+export LINEAR_CLIENT_SECRET=your_linear_client_secret
+export LINEAR_WEBHOOK_SECRET=your_linear_webhook_secret
+```
+
 ## Configuration
 
 After initial setup, Cyrus stores your configuration in `~/.cyrus/config.json`. You can edit this file to customize the following settings:
@@ -108,7 +241,7 @@ Example: `["backend", "api"]` - Only process issues that have the "backend" or "
 When multiple routing configurations are present, Cyrus evaluates them in the following priority order:
 
 1. **`routingLabels`** (highest priority) - Label-based routing
-2. **`projectKeys`** (medium priority) - Project-based routing  
+2. **`projectKeys`** (medium priority) - Project-based routing
 3. **`teamKeys`** (lowest priority) - Team-based routing
 
 If an issue matches multiple routing configurations, the highest priority match will be used. For example, if an issue has a label that matches `routingLabels` and also belongs to a project in `projectKeys`, the label-based routing will take precedence.
@@ -233,7 +366,7 @@ When determining allowed tools, Cyrus follows this priority order:
 ## Setup on Remote Host
 
 <details>
-  
+
 If you want to host Cyrus on a remote machine for 24/7 availability, follow these steps on a newly created virtual machine to get started.
 
 1. Install `gh`, `npm`, and `git`
