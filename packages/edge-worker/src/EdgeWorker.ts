@@ -3626,9 +3626,9 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 	}
 
 	/**
-	 * Refresh Linear token for a repository via the proxy worker
+	 * Refresh Linear token for a repository via the proxy worker with exponential backoff
 	 */
-	private async refreshLinearToken(repositoryId: string): Promise<string> {
+	private async refreshLinearToken(repositoryId: string, retryAttempt = 0): Promise<string> {
 		const repository = this.repositories.get(repositoryId);
 		if (!repository) {
 			throw new Error(`Repository ${repositoryId} not found`);
@@ -3640,42 +3640,90 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 			);
 		}
 
+		const maxRetries = 3;
+		const baseDelay = 1000; // 1 second
+
 		console.log(
-			`[EdgeWorker] Refreshing Linear token for repository ${repositoryId}, workspace ${repository.linearWorkspaceId}`,
+			`[EdgeWorker] Refreshing Linear token for repository ${repositoryId}, workspace ${repository.linearWorkspaceId} (attempt ${retryAttempt + 1}/${maxRetries + 1})`,
 		);
 
-		// Call proxy refresh endpoint
-		const response = await fetch(`${this.config.proxyUrl}/oauth/refresh-token`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ workspaceId: repository.linearWorkspaceId }),
-		});
+		try {
+			// Call proxy refresh endpoint
+			const response = await fetch(`${this.config.proxyUrl}/oauth/refresh-token`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ workspaceId: repository.linearWorkspaceId }),
+			});
 
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`Token refresh failed: ${response.status} ${errorText}`);
-		}
+			if (!response.ok) {
+				const errorText = await response.text();
+				
+				// Check if this is a retryable error
+				const isRetryable = response.status >= 500 || response.status === 429;
+				
+				if (isRetryable && retryAttempt < maxRetries) {
+					// Calculate exponential backoff delay
+					const delay = baseDelay * Math.pow(2, retryAttempt) + Math.random() * 1000;
+					console.warn(
+						`[EdgeWorker] Token refresh failed with retryable error (${response.status}), retrying in ${Math.round(delay)}ms...`,
+					);
+					
+					await new Promise(resolve => setTimeout(resolve, delay));
+					return this.refreshLinearToken(repositoryId, retryAttempt + 1);
+				}
+				
+				throw new Error(`Token refresh failed: ${response.status} ${errorText}`);
+			}
 
-		const result = await response.json();
-		if (!result.success || !result.token?.accessToken) {
-			throw new Error(
-				`Token refresh returned invalid response: ${JSON.stringify(result)}`,
+			const result = await response.json();
+			if (!result.success || !result.token?.accessToken) {
+				throw new Error(
+					`Token refresh returned invalid response: ${JSON.stringify(result)}`,
+				);
+			}
+
+			// Update repository config and recreate LinearClient
+			repository.linearToken = result.token.accessToken;
+			this.linearClients.set(
+				repositoryId,
+				new LinearClient({
+					accessToken: result.token.accessToken,
+				}),
 			);
+
+			console.log(
+				`[EdgeWorker] Successfully refreshed token for repository ${repositoryId}`,
+			);
+			return result.token.accessToken;
+		} catch (error) {
+			// Handle network errors with retry
+			if (retryAttempt < maxRetries && this.isNetworkError(error)) {
+				const delay = baseDelay * Math.pow(2, retryAttempt) + Math.random() * 1000;
+				console.warn(
+					`[EdgeWorker] Network error during token refresh, retrying in ${Math.round(delay)}ms...`,
+					error,
+				);
+				
+				await new Promise(resolve => setTimeout(resolve, delay));
+				return this.refreshLinearToken(repositoryId, retryAttempt + 1);
+			}
+			
+			throw error;
 		}
+	}
 
-		// Update repository config and recreate LinearClient
-		repository.linearToken = result.token.accessToken;
-		this.linearClients.set(
-			repositoryId,
-			new LinearClient({
-				accessToken: result.token.accessToken,
-			}),
+	/**
+	 * Check if an error is a network error that should be retried
+	 */
+	private isNetworkError(error: any): boolean {
+		const errorMessage = error?.message?.toLowerCase() || "";
+		return (
+			errorMessage.includes("network") ||
+			errorMessage.includes("timeout") ||
+			errorMessage.includes("connection") ||
+			errorMessage.includes("dns") ||
+			errorMessage.includes("fetch")
 		);
-
-		console.log(
-			`[EdgeWorker] Successfully refreshed token for repository ${repositoryId}`,
-		);
-		return result.token.accessToken;
 	}
 
 	/**

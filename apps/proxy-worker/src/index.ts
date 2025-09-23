@@ -83,7 +83,7 @@ router.get("/oauth/callback", async (request: Request, env: Env) => {
 	return oauthService.handleCallback(request);
 });
 
-// OAuth token refresh route
+// OAuth token refresh route with rate limiting
 router.post("/oauth/refresh-token", async (request: Request, env: Env) => {
 	try {
 		const body = await request.json();
@@ -99,8 +99,61 @@ router.post("/oauth/refresh-token", async (request: Request, env: Env) => {
 			);
 		}
 
+		// Rate limiting: max 10 requests per minute per workspace
+		const rateLimitKey = `rate_limit:refresh:${workspaceId}`;
+		const now = Date.now();
+		const windowMs = 60000; // 1 minute
+		const maxRequests = 10;
+
+		const rateLimitData = await env.OAUTH_STATE.get(rateLimitKey);
+		let requestCount = 1;
+		let windowStart = now;
+
+		if (rateLimitData) {
+			const parsed = JSON.parse(rateLimitData);
+			if (now - parsed.windowStart < windowMs) {
+				requestCount = parsed.count + 1;
+				windowStart = parsed.windowStart;
+				
+				if (requestCount > maxRequests) {
+					console.warn(`[RateLimit] Too many refresh requests for workspace ${workspaceId}`);
+					return new Response(
+						JSON.stringify({ 
+							error: "Rate limit exceeded. Maximum 10 refresh requests per minute per workspace.",
+							retryAfter: Math.ceil((windowStart + windowMs - now) / 1000)
+						}),
+						{
+							status: 429,
+							headers: { 
+								"Content-Type": "application/json",
+								"Retry-After": Math.ceil((windowStart + windowMs - now) / 1000).toString()
+							},
+						}
+					);
+				}
+			} else {
+				// New window
+				requestCount = 1;
+				windowStart = now;
+			}
+		}
+
+		// Update rate limit counter
+		await env.OAUTH_STATE.put(
+			rateLimitKey,
+			JSON.stringify({ count: requestCount, windowStart }),
+			{ expirationTtl: Math.ceil(windowMs / 1000) + 10 } // Add buffer for cleanup
+		);
+
 		const oauthService = new OAuthService(env);
 		const refreshedToken = await oauthService.refreshToken(workspaceId);
+
+		// Log successful refresh for monitoring
+		console.log(`[OAuth] Token refresh success for workspace ${workspaceId}`, {
+			refreshedAt: new Date().toISOString(),
+			expiresAt: new Date(refreshedToken.expiresAt).toISOString(),
+			scopeCount: refreshedToken.scope.length,
+		});
 
 		return new Response(
 			JSON.stringify({
@@ -118,14 +171,33 @@ router.post("/oauth/refresh-token", async (request: Request, env: Env) => {
 			}
 		);
 	} catch (error) {
-		console.error("Token refresh failed:", error);
+		// Enhanced error logging for monitoring
+		console.error(`[OAuth] Token refresh failed for workspace ${workspaceId}`, {
+			error: error instanceof Error ? error.message : String(error),
+			stack: error instanceof Error ? error.stack : undefined,
+			timestamp: new Date().toISOString(),
+			workspaceId,
+		});
+
+		// Determine appropriate HTTP status based on error type
+		let status = 500;
+		if (error instanceof Error) {
+			if (error.message.includes("No token found") || error.message.includes("No refresh token")) {
+				status = 404;
+			} else if (error.message.includes("Invalid refresh token") || error.message.includes("expired")) {
+				status = 401;
+			} else if (error.message.includes("Rate limit")) {
+				status = 429;
+			}
+		}
+
 		return new Response(
 			JSON.stringify({
 				success: false,
 				error: error instanceof Error ? error.message : "Token refresh failed",
 			}),
 			{
-				status: 500,
+				status,
 				headers: { "Content-Type": "application/json" },
 			}
 		);

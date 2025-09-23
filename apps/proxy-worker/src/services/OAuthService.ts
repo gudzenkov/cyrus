@@ -3,6 +3,7 @@ import { KVOAuthStorage } from "./KVOAuthStorage";
 
 export class OAuthService {
 	private tokenStorage: KVOAuthStorage;
+	private refreshLocks = new Map<string, Promise<OAuthToken>>();
 
 	constructor(
 		private env: Env,
@@ -304,9 +305,33 @@ export class OAuthService {
 	}
 
 	/**
-	 * Refresh an OAuth token using Linear's OAuth 2.0 refresh token flow
+	 * Refresh an OAuth token using Linear's OAuth 2.0 refresh token flow with concurrency control
 	 */
 	async refreshToken(workspaceId: string): Promise<OAuthToken> {
+		// Check if a refresh is already in progress for this workspace
+		const existingRefresh = this.refreshLocks.get(workspaceId);
+		if (existingRefresh) {
+			console.log(`[OAuth] Refresh already in progress for workspace ${workspaceId}, waiting...`);
+			return existingRefresh;
+		}
+
+		// Create and store the refresh promise
+		const refreshPromise = this.performTokenRefresh(workspaceId);
+		this.refreshLocks.set(workspaceId, refreshPromise);
+
+		try {
+			const result = await refreshPromise;
+			return result;
+		} finally {
+			// Always clean up the lock
+			this.refreshLocks.delete(workspaceId);
+		}
+	}
+
+	/**
+	 * Internal method to perform the actual token refresh
+	 */
+	private async performTokenRefresh(workspaceId: string): Promise<OAuthToken> {
 		const currentToken = await this.tokenStorage.getToken(workspaceId);
 		if (!currentToken) {
 			throw new Error("No token found to refresh");
@@ -332,10 +357,46 @@ export class OAuthService {
 
 		if (!response.ok) {
 			const error = await response.text();
-			throw new Error(`Token refresh failed: ${error}`);
+			// Log full error details internally for debugging
+			console.error(`[OAuth] Token refresh failed - Status: ${response.status}`, {
+				error,
+				workspaceId,
+				statusText: response.statusText,
+			});
+			
+			// Return sanitized error message to prevent information leakage
+			if (response.status === 400) {
+				throw new Error("Invalid refresh token or request parameters");
+			} else if (response.status === 401) {
+				throw new Error("Refresh token has expired or been revoked");
+			} else if (response.status >= 500) {
+				throw new Error("Linear OAuth service temporarily unavailable");
+			} else {
+				throw new Error("Token refresh failed");
+			}
 		}
 
 		const tokenResponse = await response.json();
+
+		// Validate and process token response
+		if (!tokenResponse.access_token) {
+			throw new Error("Invalid token response: missing access_token");
+		}
+
+		if (!tokenResponse.expires_in || tokenResponse.expires_in <= 0) {
+			throw new Error("Invalid token response: missing or invalid expires_in");
+		}
+
+		// Process and validate scopes
+		const newScopes = tokenResponse.scope ? tokenResponse.scope.split(" ") : currentToken.scope;
+		
+		// Log scope changes for security monitoring
+		if (JSON.stringify(newScopes.sort()) !== JSON.stringify(currentToken.scope.sort())) {
+			console.warn(`[OAuth] Token scope changed during refresh for workspace ${workspaceId}`, {
+				oldScope: currentToken.scope,
+				newScope: newScopes,
+			});
+		}
 
 		// Create new token object with refreshed data
 		const newToken: OAuthToken = {
@@ -343,12 +404,19 @@ export class OAuthService {
 			refreshToken: tokenResponse.refresh_token || currentToken.refreshToken, // Use new refresh token if provided, otherwise keep existing
 			expiresAt: Date.now() + tokenResponse.expires_in * 1000,
 			obtainedAt: Date.now(),
-			scope: tokenResponse.scope ? tokenResponse.scope.split(" ") : currentToken.scope,
+			scope: newScopes,
 			tokenType: tokenResponse.token_type || "Bearer",
 			userId: currentToken.userId, // Keep existing user info
 			userEmail: currentToken.userEmail,
 			workspaceName: currentToken.workspaceName,
 		};
+
+		// Log successful refresh for monitoring
+		console.log(`[OAuth] Successfully refreshed token for workspace ${workspaceId}`, {
+			expiresIn: tokenResponse.expires_in,
+			hasNewRefreshToken: !!tokenResponse.refresh_token,
+			scopeCount: newScopes.length,
+		});
 
 		// Save the refreshed token
 		await this.tokenStorage.saveToken(workspaceId, newToken);

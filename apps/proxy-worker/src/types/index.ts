@@ -36,7 +36,8 @@ export interface EncryptedOAuthToken
 	extends Omit<OAuthToken, "accessToken" | "refreshToken"> {
 	accessToken: string; // encrypted
 	refreshToken?: string; // encrypted
-	iv: string;
+	iv: string; // IV for access token
+	refreshTokenIv?: string; // IV for refresh token (optional for backward compatibility)
 }
 
 export interface OAuthState {
