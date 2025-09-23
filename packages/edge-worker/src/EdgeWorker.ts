@@ -587,34 +587,34 @@ export class EdgeWorker extends EventEmitter {
 		if (reposWithRoutingLabels.length > 0 && issueId && workspaceRepos[0]) {
 			// We need a Linear client to fetch labels
 			// Use the first workspace repo's client temporarily
-			const linearClient = this.linearClients.get(workspaceRepos[0].id);
+			try {
+				// Fetch the issue to get labels with retry support
+				const issue = await this.callLinearAPIWithRetry(
+					workspaceRepos[0].id,
+					(client) => client.issue(issueId),
+					"fetch issue for routing",
+				);
+				const labels = await this.fetchIssueLabels(issue);
 
-			if (linearClient) {
-				try {
-					// Fetch the issue to get labels
-					const issue = await linearClient.issue(issueId);
-					const labels = await this.fetchIssueLabels(issue);
-
-					// Check each repo with routing labels
-					for (const repo of reposWithRoutingLabels) {
-						if (
-							repo.routingLabels?.some((routingLabel) =>
-								labels.includes(routingLabel),
-							)
-						) {
-							console.log(
-								`[EdgeWorker] Repository selected: ${repo.name} (label-based routing)`,
-							);
-							return repo;
-						}
+				// Check each repo with routing labels
+				for (const repo of reposWithRoutingLabels) {
+					if (
+						repo.routingLabels?.some((routingLabel) =>
+							labels.includes(routingLabel),
+						)
+					) {
+						console.log(
+							`[EdgeWorker] Repository selected: ${repo.name} (label-based routing)`,
+						);
+						return repo;
 					}
-				} catch (error) {
-					console.error(
-						`[EdgeWorker] Failed to fetch labels for routing:`,
-						error,
-					);
-					// Continue to project-based routing
 				}
+			} catch (error) {
+				console.error(
+					`[EdgeWorker] Failed to fetch labels for routing:`,
+					error,
+				);
+				// Continue to project-based routing
 			}
 		}
 
@@ -2069,14 +2069,6 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		repositoryId: string,
 	): Promise<void> {
 		try {
-			const linearClient = this.linearClients.get(repositoryId);
-			if (!linearClient) {
-				console.warn(
-					`No Linear client found for repository ${repositoryId}, skipping state update`,
-				);
-				return;
-			}
-
 			// Check if issue is already in a started state
 			const currentState = await issue.state;
 			if (currentState?.type === "started") {
@@ -2095,10 +2087,15 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 				return;
 			}
 
-			// Get available workflow states for the issue's team
-			const teamStates = await linearClient.workflowStates({
-				filter: { team: { id: { eq: team.id } } },
-			});
+			// Get available workflow states for the issue's team with retry
+			const teamStates = await this.callLinearAPIWithRetry(
+				repositoryId,
+				(client) =>
+					client.workflowStates({
+						filter: { team: { id: { eq: team.id } } },
+					}),
+				"fetch workflow states",
+			);
 
 			const states = teamStates;
 
@@ -2129,9 +2126,14 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 				return;
 			}
 
-			await linearClient.updateIssue(issue.id, {
-				stateId: startedState.id,
-			});
+			await this.callLinearAPIWithRetry(
+				repositoryId,
+				(client) =>
+					client.updateIssue(issue.id, {
+						stateId: startedState.id,
+					}),
+				"update issue state",
+			);
 
 			console.log(
 				`✅ Successfully moved issue ${issue.identifier} to ${startedState.name} state`,
@@ -2171,11 +2173,6 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		repositoryId: string,
 		parentId?: string,
 	): Promise<void> {
-		// Get the Linear client for this repository
-		const linearClient = this.linearClients.get(repositoryId);
-		if (!linearClient) {
-			throw new Error(`No Linear client found for repository ${repositoryId}`);
-		}
 		const commentData: { issueId: string; body: string; parentId?: string } = {
 			issueId,
 			body,
@@ -2184,7 +2181,12 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		if (parentId) {
 			commentData.parentId = parentId;
 		}
-		await linearClient.createComment(commentData);
+
+		await this.callLinearAPIWithRetry(
+			repositoryId,
+			(client) => client.createComment(commentData),
+			"post comment",
+		);
 	}
 
 	/**
@@ -3550,17 +3552,15 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		issueId: string,
 		repositoryId: string,
 	): Promise<LinearIssue | null> {
-		const linearClient = this.linearClients.get(repositoryId);
-		if (!linearClient) {
-			console.warn(
-				`[EdgeWorker] No Linear client found for repository ${repositoryId}`,
-			);
-			return null;
-		}
-
 		try {
 			console.log(`[EdgeWorker] Fetching full issue details for ${issueId}`);
-			const fullIssue = await linearClient.issue(issueId);
+			
+			const fullIssue = await this.callLinearAPIWithRetry(
+				repositoryId,
+				(client) => client.issue(issueId),
+				"fetch issue details",
+			);
+
 			console.log(
 				`[EdgeWorker] Successfully fetched issue details for ${issueId}`,
 			);
@@ -3584,6 +3584,144 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 				error,
 			);
 			return null;
+		}
+	}
+
+	/**
+	 * Check if an error indicates Linear authentication failure
+	 */
+	private isAuthenticationError(error: any): boolean {
+		// Check for common authentication error patterns
+		if (error?.message) {
+			const message = error.message.toLowerCase();
+			return (
+				message.includes("unauthorized") ||
+				message.includes("authentication") ||
+				message.includes("invalid token") ||
+				message.includes("token expired") ||
+				message.includes("access denied") ||
+				message.includes("401") ||
+				message.includes("403")
+			);
+		}
+
+		// Check for HTTP status codes if available
+		if (error?.status === 401 || error?.status === 403) {
+			return true;
+		}
+
+		// Check for GraphQL errors that indicate authentication issues
+		if (error?.errors && Array.isArray(error.errors)) {
+			return error.errors.some((gqlError: any) => {
+				const errorMessage = gqlError?.message?.toLowerCase() || "";
+				return (
+					errorMessage.includes("unauthorized") ||
+					errorMessage.includes("authentication") ||
+					errorMessage.includes("invalid token")
+				);
+			});
+		}
+
+		return false;
+	}
+
+	/**
+	 * Refresh Linear token for a repository via the proxy worker
+	 */
+	private async refreshLinearToken(repositoryId: string): Promise<string> {
+		const repository = this.repositories.get(repositoryId);
+		if (!repository) {
+			throw new Error(`Repository ${repositoryId} not found`);
+		}
+
+		if (!repository.linearWorkspaceId) {
+			throw new Error(
+				`No Linear workspace ID found for repository ${repositoryId}`,
+			);
+		}
+
+		console.log(
+			`[EdgeWorker] Refreshing Linear token for repository ${repositoryId}, workspace ${repository.linearWorkspaceId}`,
+		);
+
+		// Call proxy refresh endpoint
+		const response = await fetch(`${this.config.proxyUrl}/oauth/refresh-token`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ workspaceId: repository.linearWorkspaceId }),
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			throw new Error(`Token refresh failed: ${response.status} ${errorText}`);
+		}
+
+		const result = await response.json();
+		if (!result.success || !result.token?.accessToken) {
+			throw new Error(
+				`Token refresh returned invalid response: ${JSON.stringify(result)}`,
+			);
+		}
+
+		// Update repository config and recreate LinearClient
+		repository.linearToken = result.token.accessToken;
+		this.linearClients.set(
+			repositoryId,
+			new LinearClient({
+				accessToken: result.token.accessToken,
+			}),
+		);
+
+		console.log(
+			`[EdgeWorker] Successfully refreshed token for repository ${repositoryId}`,
+		);
+		return result.token.accessToken;
+	}
+
+	/**
+	 * Execute a Linear API call with automatic token refresh on authentication failure
+	 */
+	private async callLinearAPIWithRetry<T>(
+		repositoryId: string,
+		apiCall: (client: LinearClient) => Promise<T>,
+		operation?: string,
+	): Promise<T> {
+		const client = this.linearClients.get(repositoryId);
+		if (!client) {
+			throw new Error(`No Linear client found for repository ${repositoryId}`);
+		}
+
+		try {
+			return await apiCall(client);
+		} catch (error) {
+			// Check if this is an authentication error
+			if (this.isAuthenticationError(error)) {
+				console.log(
+					`[EdgeWorker] Authentication error detected${operation ? ` during ${operation}` : ""}, refreshing token for repository ${repositoryId}`,
+				);
+
+				try {
+					// Refresh token and get new client
+					await this.refreshLinearToken(repositoryId);
+					const newClient = this.linearClients.get(repositoryId)!;
+
+					// Retry the API call once
+					console.log(
+						`[EdgeWorker] Retrying${operation ? ` ${operation}` : ""} with refreshed token`,
+					);
+					return await apiCall(newClient);
+				} catch (refreshError) {
+					console.error(
+						`[EdgeWorker] Token refresh failed${operation ? ` during ${operation}` : ""}:`,
+						refreshError,
+					);
+					// Re-throw the original error since refresh failed
+					throw error;
+				}
+			}
+
+			// Re-throw non-auth errors
+			throw error;
 		}
 	}
 }

@@ -41,6 +41,11 @@ router.get("/", (request: Request, _env: Env) => {
       </div>
       
       <div class="endpoint">
+        <span class="method">POST</span> /oauth/refresh-token
+        <p>Refresh OAuth access token for a workspace</p>
+      </div>
+      
+      <div class="endpoint">
         <span class="method">POST</span> /webhook
         <p>Webhook receiver endpoint</p>
       </div>
@@ -76,6 +81,55 @@ router.get("/oauth/authorize", async (request: Request, env: Env) => {
 router.get("/oauth/callback", async (request: Request, env: Env) => {
 	const oauthService = new OAuthService(env);
 	return oauthService.handleCallback(request);
+});
+
+// OAuth token refresh route
+router.post("/oauth/refresh-token", async (request: Request, env: Env) => {
+	try {
+		const body = await request.json();
+		const { workspaceId } = body;
+
+		if (!workspaceId) {
+			return new Response(
+				JSON.stringify({ error: "workspaceId is required" }),
+				{
+					status: 400,
+					headers: { "Content-Type": "application/json" },
+				}
+			);
+		}
+
+		const oauthService = new OAuthService(env);
+		const refreshedToken = await oauthService.refreshToken(workspaceId);
+
+		return new Response(
+			JSON.stringify({
+				success: true,
+				token: {
+					accessToken: refreshedToken.accessToken,
+					expiresAt: refreshedToken.expiresAt,
+					obtainedAt: refreshedToken.obtainedAt,
+					// Don't expose refresh token in response for security
+				},
+			}),
+			{
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}
+		);
+	} catch (error) {
+		console.error("Token refresh failed:", error);
+		return new Response(
+			JSON.stringify({
+				success: false,
+				error: error instanceof Error ? error.message : "Token refresh failed",
+			}),
+			{
+				status: 500,
+				headers: { "Content-Type": "application/json" },
+			}
+		);
+	}
 });
 
 // Webhook route

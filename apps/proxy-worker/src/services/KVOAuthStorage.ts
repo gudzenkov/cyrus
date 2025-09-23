@@ -62,20 +62,13 @@ export class KVOAuthStorage implements OAuthTokenStorage {
 	}
 
 	/**
-	 * Refresh an OAuth token (to be implemented with Linear API)
+	 * Refresh an OAuth token using Linear's OAuth 2.0 refresh token flow
+	 * This method is implemented in OAuthService and called via the HTTP endpoint
 	 */
 	async refreshToken(workspaceId: string): Promise<OAuthToken> {
-		const currentToken = await this.getToken(workspaceId);
-		if (!currentToken) {
-			throw new Error("No token found to refresh");
-		}
-
-		if (!currentToken.refreshToken) {
-			throw new Error("No refresh token available");
-		}
-
-		// TODO: Implement actual refresh logic with Linear API
-		// For now, throw an error
-		throw new Error("Token refresh not yet implemented");
+		// This method is optional in the interface and mainly exists for completeness
+		// The actual refresh logic is implemented in OAuthService.refreshToken()
+		// and exposed via the /oauth/refresh-token HTTP endpoint
+		throw new Error("Token refresh must be called through OAuthService via /oauth/refresh-token endpoint");
 	}
 }

@@ -302,4 +302,57 @@ export class OAuthService {
 			{ expirationTtl: 86400 }, // 24 hours
 		);
 	}
+
+	/**
+	 * Refresh an OAuth token using Linear's OAuth 2.0 refresh token flow
+	 */
+	async refreshToken(workspaceId: string): Promise<OAuthToken> {
+		const currentToken = await this.tokenStorage.getToken(workspaceId);
+		if (!currentToken) {
+			throw new Error("No token found to refresh");
+		}
+
+		if (!currentToken.refreshToken) {
+			throw new Error("No refresh token available");
+		}
+
+		// Call Linear's token refresh endpoint
+		const response = await fetch("https://api.linear.app/oauth/token", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+			},
+			body: new URLSearchParams({
+				grant_type: "refresh_token",
+				refresh_token: currentToken.refreshToken,
+				client_id: this.env.LINEAR_CLIENT_ID,
+				client_secret: this.env.LINEAR_CLIENT_SECRET,
+			}),
+		});
+
+		if (!response.ok) {
+			const error = await response.text();
+			throw new Error(`Token refresh failed: ${error}`);
+		}
+
+		const tokenResponse = await response.json();
+
+		// Create new token object with refreshed data
+		const newToken: OAuthToken = {
+			accessToken: tokenResponse.access_token,
+			refreshToken: tokenResponse.refresh_token || currentToken.refreshToken, // Use new refresh token if provided, otherwise keep existing
+			expiresAt: Date.now() + tokenResponse.expires_in * 1000,
+			obtainedAt: Date.now(),
+			scope: tokenResponse.scope ? tokenResponse.scope.split(" ") : currentToken.scope,
+			tokenType: tokenResponse.token_type || "Bearer",
+			userId: currentToken.userId, // Keep existing user info
+			userEmail: currentToken.userEmail,
+			workspaceName: currentToken.workspaceName,
+		};
+
+		// Save the refreshed token
+		await this.tokenStorage.saveToken(workspaceId, newToken);
+
+		return newToken;
+	}
 }
