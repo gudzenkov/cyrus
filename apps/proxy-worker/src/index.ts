@@ -42,7 +42,12 @@ router.get("/", (request: Request, _env: Env) => {
       
       <div class="endpoint">
         <span class="method">POST</span> /oauth/refresh-token
-        <p>Refresh OAuth access token for a workspace</p>
+        <p>Refresh OAuth access token for a workspace (rate limited: 10/min per workspace)</p>
+      </div>
+      
+      <div class="endpoint">
+        <span class="method">GET</span> /health
+        <p>Health check endpoint for monitoring</p>
       </div>
       
       <div class="endpoint">
@@ -198,6 +203,75 @@ router.post("/oauth/refresh-token", async (request: Request, env: Env) => {
 			}),
 			{
 				status,
+				headers: { "Content-Type": "application/json" },
+			}
+		);
+	}
+});
+
+// Health check endpoint
+router.get("/health", async (request: Request, env: Env) => {
+	try {
+		// Basic health checks
+		const health = {
+			status: "healthy",
+			timestamp: new Date().toISOString(),
+			version: "1.0.0",
+			services: {
+				kv_oauth_tokens: "unknown",
+				kv_oauth_state: "unknown",
+				linear_api: "unknown",
+			},
+		};
+
+		// Test KV storage access
+		try {
+			await env.OAUTH_TOKENS.put("health_check", "test", { expirationTtl: 5 });
+			await env.OAUTH_TOKENS.delete("health_check");
+			health.services.kv_oauth_tokens = "healthy";
+		} catch {
+			health.services.kv_oauth_tokens = "unhealthy";
+		}
+
+		try {
+			await env.OAUTH_STATE.put("health_check", "test", { expirationTtl: 5 });
+			await env.OAUTH_STATE.delete("health_check");
+			health.services.kv_oauth_state = "healthy";
+		} catch {
+			health.services.kv_oauth_state = "unhealthy";
+		}
+
+		// Test Linear API connectivity (basic check)
+		try {
+			const response = await fetch("https://api.linear.app/graphql", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ query: "{ __typename }" }),
+			});
+			health.services.linear_api = response.ok ? "healthy" : "degraded";
+		} catch {
+			health.services.linear_api = "unhealthy";
+		}
+
+		// Determine overall status
+		const unhealthyServices = Object.values(health.services).filter(s => s === "unhealthy").length;
+		if (unhealthyServices > 0) {
+			health.status = unhealthyServices >= 2 ? "unhealthy" : "degraded";
+		}
+
+		return new Response(JSON.stringify(health, null, 2), {
+			status: health.status === "healthy" ? 200 : health.status === "degraded" ? 200 : 503,
+			headers: { "Content-Type": "application/json" },
+		});
+	} catch (error) {
+		return new Response(
+			JSON.stringify({
+				status: "unhealthy",
+				timestamp: new Date().toISOString(),
+				error: "Health check failed",
+			}),
+			{
+				status: 503,
 				headers: { "Content-Type": "application/json" },
 			}
 		);
