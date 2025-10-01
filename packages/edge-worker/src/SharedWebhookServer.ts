@@ -20,10 +20,16 @@ export class SharedWebhookServer {
 	private port: number;
 	private host: string;
 	private isListening = false;
+	private debug: boolean;
 
-	constructor(port: number = 3456, host: string = "localhost") {
+	constructor(
+		port: number = 3456,
+		host: string = "localhost",
+		debug: boolean = false,
+	) {
 		this.port = port;
 		this.host = host;
+		this.debug = debug || process.env.CYRUS_WEBHOOK_DEBUG === "true";
 	}
 
 	/**
@@ -108,17 +114,23 @@ export class SharedWebhookServer {
 		res: ServerResponse,
 	): Promise<void> {
 		try {
-			console.log(`🔗 Incoming webhook request: ${req.method} ${req.url}`);
+			if (this.debug) {
+				console.log(`🔗 Incoming webhook request: ${req.method} ${req.url}`);
+			}
 
 			if (req.method !== "POST") {
-				console.log(`🔗 Rejected non-POST request: ${req.method}`);
+				if (this.debug) {
+					console.log(`🔗 Rejected non-POST request: ${req.method}`);
+				}
 				res.writeHead(405, { "Content-Type": "text/plain" });
 				res.end("Method Not Allowed");
 				return;
 			}
 
 			if (req.url !== "/webhook") {
-				console.log(`🔗 Rejected request to wrong URL: ${req.url}`);
+				if (this.debug) {
+					console.log(`🔗 Rejected request to wrong URL: ${req.url}`);
+				}
 				res.writeHead(404, { "Content-Type": "text/plain" });
 				res.end("Not Found");
 				return;
@@ -135,12 +147,16 @@ export class SharedWebhookServer {
 					const signature = req.headers["x-webhook-signature"] as string;
 					const timestamp = req.headers["x-webhook-timestamp"] as string;
 
-					console.log(
-						`🔗 Webhook received with ${body.length} bytes, ${this.webhookHandlers.size} registered handlers`,
-					);
+					if (this.debug) {
+						console.log(
+							`🔗 Webhook received with ${body.length} bytes, ${this.webhookHandlers.size} registered handlers`,
+						);
+					}
 
 					if (!signature) {
-						console.log("🔗 Webhook rejected: Missing signature header");
+						if (this.debug) {
+							console.log("🔗 Webhook rejected: Missing signature header");
+						}
 						res.writeHead(400, { "Content-Type": "text/plain" });
 						res.end("Missing signature");
 						return;
@@ -155,9 +171,11 @@ export class SharedWebhookServer {
 								// Handler verified signature and processed webhook
 								res.writeHead(200, { "Content-Type": "text/plain" });
 								res.end("OK");
-								console.log(
-									`🔗 Webhook delivered to token ending in ...${token.slice(-4)} (attempt ${handlerAttempts}/${this.webhookHandlers.size})`,
-								);
+								if (this.debug) {
+									console.log(
+										`🔗 Webhook delivered to token ending in ...${token.slice(-4)} (attempt ${handlerAttempts}/${this.webhookHandlers.size})`,
+									);
+								}
 								return;
 							}
 						} catch (error) {

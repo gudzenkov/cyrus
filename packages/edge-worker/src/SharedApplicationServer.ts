@@ -61,17 +61,20 @@ export class SharedApplicationServer {
 	private ngrokAuthToken: string | null = null;
 	private ngrokUrl: string | null = null;
 	private proxyUrl: string;
+	private debug: boolean;
 
 	constructor(
 		port: number = 3456,
 		host: string = "localhost",
 		ngrokAuthToken?: string,
 		proxyUrl?: string,
+		debug: boolean = false,
 	) {
 		this.port = port;
 		this.host = host;
 		this.ngrokAuthToken = ngrokAuthToken || null;
 		this.proxyUrl = proxyUrl || process.env.PROXY_URL || DEFAULT_PROXY_URL;
+		this.debug = debug || process.env.CYRUS_WEBHOOK_DEBUG === "true";
 	}
 
 	/**
@@ -353,10 +356,14 @@ export class SharedApplicationServer {
 		res: ServerResponse,
 	): Promise<void> {
 		try {
-			console.log(`🔗 Incoming webhook request: ${req.method} ${req.url}`);
+			if (this.debug) {
+				console.log(`🔗 Incoming webhook request: ${req.method} ${req.url}`);
+			}
 
 			if (req.method !== "POST") {
-				console.log(`🔗 Rejected non-POST request: ${req.method}`);
+				if (this.debug) {
+					console.log(`🔗 Rejected non-POST request: ${req.method}`);
+				}
 				res.writeHead(405, { "Content-Type": "text/plain" });
 				res.end("Method Not Allowed");
 				return;
@@ -369,18 +376,22 @@ export class SharedApplicationServer {
 			if (isDirectWebhook && this.linearWebhookHandlers.size > 0) {
 				// For direct Linear webhooks, pass the raw request to the handler
 				// The LinearWebhookClient will handle its own signature verification
-				console.log(
-					`🔗 Direct Linear webhook received, trying ${this.linearWebhookHandlers.size} direct handlers`,
-				);
+				if (this.debug) {
+					console.log(
+						`🔗 Direct Linear webhook received, trying ${this.linearWebhookHandlers.size} direct handlers`,
+					);
+				}
 
 				// Try each direct handler
 				for (const [token, handler] of this.linearWebhookHandlers) {
 					try {
 						// The handler will manage the response
 						await handler(req, res);
-						console.log(
-							`🔗 Direct webhook delivered to token ending in ...${token.slice(-4)}`,
-						);
+						if (this.debug) {
+							console.log(
+								`🔗 Direct webhook delivered to token ending in ...${token.slice(-4)}`,
+							);
+						}
 						return;
 					} catch (error) {
 						console.error(
@@ -412,12 +423,16 @@ export class SharedApplicationServer {
 					const signature = req.headers["x-webhook-signature"] as string;
 					const timestamp = req.headers["x-webhook-timestamp"] as string;
 
-					console.log(
-						`🔗 Proxy webhook received with ${body.length} bytes, ${this.webhookHandlers.size} registered handlers`,
-					);
+					if (this.debug) {
+						console.log(
+							`🔗 Proxy webhook received with ${body.length} bytes, ${this.webhookHandlers.size} registered handlers`,
+						);
+					}
 
 					if (!signature) {
-						console.log("🔗 Webhook rejected: Missing signature header");
+						if (this.debug) {
+							console.log("🔗 Webhook rejected: Missing signature header");
+						}
 						res.writeHead(400, { "Content-Type": "text/plain" });
 						res.end("Missing signature");
 						return;
@@ -432,9 +447,11 @@ export class SharedApplicationServer {
 								// Handler verified signature and processed webhook
 								res.writeHead(200, { "Content-Type": "text/plain" });
 								res.end("OK");
-								console.log(
-									`🔗 Webhook delivered to token ending in ...${token.slice(-4)} (attempt ${handlerAttempts}/${this.webhookHandlers.size})`,
-								);
+								if (this.debug) {
+									console.log(
+										`🔗 Webhook delivered to token ending in ...${token.slice(-4)} (attempt ${handlerAttempts}/${this.webhookHandlers.size})`,
+									);
+								}
 								return;
 							}
 						} catch (error) {
