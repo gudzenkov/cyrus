@@ -554,6 +554,15 @@ export class EdgeWorker extends EventEmitter {
 		const workspaceId = webhook.organizationId;
 		if (!workspaceId) return repos[0] || null; // Fallback to first repo if no workspace ID
 
+		console.log(
+			`[EdgeWorker] findRepositoryForWebhook: total repos=${repos.length}, workspaceId=${workspaceId}`,
+		);
+		repos.forEach((r) =>
+			console.log(
+				`  - ${r.name}: linearWorkspaceId=${r.linearWorkspaceId}, teamKeys=${JSON.stringify(r.teamKeys)}, isActive=${r.isActive}`,
+			),
+		);
+
 		// Get issue information from webhook
 		let issueId: string | undefined;
 		let teamKey: string | undefined;
@@ -577,6 +586,10 @@ export class EdgeWorker extends EventEmitter {
 		const workspaceRepos = repos.filter(
 			(repo) => repo.linearWorkspaceId === workspaceId,
 		);
+		console.log(
+			`[EdgeWorker] After workspace filter: workspaceRepos=${workspaceRepos.length}`,
+		);
+		workspaceRepos.forEach((r) => console.log(`  - ${r.name}`));
 		if (workspaceRepos.length === 0) return null;
 
 		// Priority 1: Check routing labels (highest priority)
@@ -584,10 +597,18 @@ export class EdgeWorker extends EventEmitter {
 			(repo) => repo.routingLabels && repo.routingLabels.length > 0,
 		);
 
+		console.log(
+			`[EdgeWorker] Routing debug: issueId=${issueId}, teamKey=${teamKey}, reposWithRoutingLabels=${reposWithRoutingLabels.length}`,
+		);
+
 		if (reposWithRoutingLabels.length > 0 && issueId && workspaceRepos[0]) {
 			// We need a Linear client to fetch labels
 			// Use the first workspace repo's client temporarily
 			const linearClient = this.linearClients.get(workspaceRepos[0].id);
+
+			console.log(
+				`[EdgeWorker] Attempting label-based routing with client: ${!!linearClient}`,
+			);
 
 			if (linearClient) {
 				try {
@@ -595,8 +616,15 @@ export class EdgeWorker extends EventEmitter {
 					const issue = await linearClient.issue(issueId);
 					const labels = await this.fetchIssueLabels(issue);
 
+					console.log(
+						`[EdgeWorker] Fetched labels for routing: ${JSON.stringify(labels)}`,
+					);
+
 					// Check each repo with routing labels
 					for (const repo of reposWithRoutingLabels) {
+						console.log(
+							`[EdgeWorker] Checking repo ${repo.name} with routingLabels: ${JSON.stringify(repo.routingLabels)}`,
+						);
 						if (
 							repo.routingLabels?.some((routingLabel) =>
 								labels.includes(routingLabel),
@@ -608,6 +636,10 @@ export class EdgeWorker extends EventEmitter {
 							return repo;
 						}
 					}
+
+					console.log(
+						`[EdgeWorker] No label-based routing match found, continuing to project routing`,
+					);
 				} catch (error) {
 					console.error(
 						`[EdgeWorker] Failed to fetch labels for routing:`,
@@ -634,6 +666,9 @@ export class EdgeWorker extends EventEmitter {
 
 		// Priority 3: Check team-based routing
 		if (teamKey) {
+			console.log(
+				`[EdgeWorker] Team-based routing: looking for teamKey=${teamKey} in ${workspaceRepos.length} repos`,
+			);
 			const repo = workspaceRepos.find((r) => r.teamKeys?.includes(teamKey));
 			if (repo) {
 				console.log(
@@ -641,6 +676,11 @@ export class EdgeWorker extends EventEmitter {
 				);
 				return repo;
 			}
+			console.log(
+				`[EdgeWorker] No team-based routing match found for teamKey=${teamKey}`,
+			);
+		} else {
+			console.log(`[EdgeWorker] No teamKey available for team-based routing`);
 		}
 
 		// Try parsing issue identifier as fallback for team routing
