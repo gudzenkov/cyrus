@@ -27,7 +27,7 @@
 		"@types/node": "^20.0.0",
 		"dotenv": "^16.5.0",
 		"typescript": "^5.3.3",
-		"vitest": "^1.1.0"
+		"vitest": "^3.2.4"
 	},
 	"publishConfig": {
 		"access": "public"
