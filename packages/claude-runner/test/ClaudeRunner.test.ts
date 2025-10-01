@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the Claude SDK
-vi.mock("@anthropic-ai/claude-code", () => ({
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 	query: vi.fn(),
 }));
 
@@ -21,7 +21,7 @@ vi.mock("os", () => ({
 	homedir: vi.fn(() => "/mock/home"),
 }));
 
-import { query } from "@anthropic-ai/claude-code";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AbortError, ClaudeRunner } from "../src/ClaudeRunner";
 import type { ClaudeRunnerConfig, SDKMessage } from "../src/types";
 
@@ -128,6 +128,7 @@ describe("ClaudeRunner", () => {
 					fallbackModel: "sonnet",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
+					systemPrompt: { type: "preset", preset: "claude_code" },
 				},
 			});
 		});
@@ -156,6 +157,7 @@ describe("ClaudeRunner", () => {
 					fallbackModel: "sonnet",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
+					systemPrompt: { type: "preset", preset: "claude_code" },
 				},
 			});
 		});
@@ -184,7 +186,7 @@ describe("ClaudeRunner", () => {
 					fallbackModel: "sonnet",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
-					customSystemPrompt: "You are a helpful assistant",
+					systemPrompt: "You are a helpful assistant",
 				},
 			});
 		});

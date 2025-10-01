@@ -4,11 +4,71 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.50] - 2025-09-30
+
 ### Added
-- Automatically pauses and resumes Claude sessions when hitting usage limits, waiting until the reset time plus one minute before retrying (cyrus-claude-runner)
+- **Global setup script support**: Added `global_setup_script` optional field in config.json
+  - Runs before repository-specific `cyrus-setup.sh` when creating git worktrees
+  - Supports ~ expansion for home directory paths
+  - Same environment variables passed to both global and repository scripts (LINEAR_ISSUE_ID, LINEAR_ISSUE_IDENTIFIER, LINEAR_ISSUE_TITLE)
+  - 5-minute timeout to prevent hanging scripts
+  - Comprehensive error handling and logging for both global and repository scripts
+  - Script failures don't prevent worktree creation
+  - Cross-platform support (bash, PowerShell, cmd, bat)
+
+- **Ephemeral agent activities for tool calls**: Standard tool calls now post ephemeral activities to Linear
+  - Tool calls (except Task and TodoWrite) create ephemeral activities that disappear when replaced
+  - Tool responses create non-ephemeral activities showing original tool name and input
+  - Tool outputs are wrapped in `+++Tool Output` collapsible blocks (collapsed by default)
+  - Tool errors display as "{ToolName} (Error)" for better clarity
+  - Subtasks maintain arrow emoji (↪) prefix for visual hierarchy
+  - TodoWrite tool results are skipped to prevent duplicate activities
+  - Reduces visual clutter in Linear while preserving important information
+
 ### Changed
-- Updated @anthropic-ai/claude-code from v1.0.95 to v1.0.112 for latest Claude Code improvements. See [Claude Code v1.0.112 changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#10112)
-- Updated @anthropic-ai/sdk from v0.60.0 to v0.62.0 for latest Anthropic SDK improvements
+- **Linear SDK upgraded to v58.1.0**: Updated across all packages to support ephemeral agent activity field
+  - Added `ephemeral: boolean` support for agent activities
+  - Maintained backward compatibility with existing non-ephemeral activities
+
+### Packages
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.0.26
+
+#### cyrus-core
+- cyrus-core@0.0.14
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.0.33
+
+#### cyrus-linear-webhook-client
+- cyrus-linear-webhook-client@0.0.3
+
+#### cyrus-ndjson-client
+- cyrus-ndjson-client@0.0.19
+
+## [0.1.49] - 2025-09-29
+
+### Changed
+- **Migrated from Claude Code SDK to Claude Agent SDK**: Replaced `@anthropic-ai/claude-code` v1.0.128 with `@anthropic-ai/claude-agent-sdk` v0.1.0
+  - Updated all imports and type references to use the new package name
+  - Handled breaking change: SDK no longer uses Claude Code's system prompt by default - now explicitly requests Claude Code preset to maintain backward compatibility
+  - No changes needed for settings sources as the codebase doesn't rely on automatic settings file loading
+- Updated @anthropic-ai/sdk from v0.62.0 to v0.64.0 for latest Anthropic SDK improvements
+
+### Packages
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.0.25
+
+#### cyrus-core
+- cyrus-core@0.0.13
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.0.32
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.1.49
 
 ## [0.1.48] - 2025-01-11
 
@@ -57,7 +117,7 @@ All notable changes to this project will be documented in this file.
 - **Sub-issue assignee inheritance with workspace context**: Sub-issues created by orchestrator agents now automatically inherit the same assignee as their parent issue, with complete workspace awareness
   - Enhanced label-prompt-template to include assignee information (`{{assignee_id}}` and `{{assignee_name}}`)
   - Added workspace teams context (`{{workspace_teams}}`) with team names, keys, IDs, and descriptions
-  - Added workspace labels context (`{{workspace_labels}}`) with label names, IDs, and descriptions  
+  - Added workspace labels context (`{{workspace_labels}}`) with label names, IDs, and descriptions
   - Updated orchestrator prompt instructions to require `assigneeId` parameter in sub-issue creation
   - Modified EdgeWorker to fetch and inject Linear workspace data (teams, labels, assignee) into orchestrator context
 - **Mandatory verification framework for orchestrator agents**: Enhanced parent-child delegation with executable verification requirements
@@ -179,7 +239,7 @@ All notable changes to this project will be documented in this file.
 
 ### Packages
 
-#### cyrus-claude-runner  
+#### cyrus-claude-runner
 - cyrus-claude-runner@0.0.21
 
 #### cyrus-edge-worker
@@ -204,7 +264,7 @@ All notable changes to this project will be documented in this file.
 #### cyrus-core
 - cyrus-core@0.0.10
 
-#### cyrus-claude-runner  
+#### cyrus-claude-runner
 - cyrus-claude-runner@0.0.20
 
 #### cyrus-edge-worker
@@ -231,7 +291,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - Fixed Windows compatibility issues that caused agent failures on Windows systems
-  - Replaced Unix-specific `mkdir -p` commands with cross-platform Node.js `mkdirSync` 
+  - Replaced Unix-specific `mkdir -p` commands with cross-platform Node.js `mkdirSync`
   - Implemented intelligent shell script detection supporting Windows (.ps1, .bat, .cmd) and Unix (.sh) scripts
   - Added graceful fallback for Windows users with Git Bash/WSL to still use bash scripts
   - Resolves "A subdirectory or file -p already exists" and "bash command not found" errors
@@ -245,7 +305,7 @@ All notable changes to this project will be documented in this file.
 #### cyrus-core
 - cyrus-core@0.0.10
 
-#### cyrus-claude-runner  
+#### cyrus-claude-runner
 - cyrus-claude-runner@0.0.19
 
 #### cyrus-edge-worker
@@ -282,7 +342,7 @@ All notable changes to this project will be documented in this file.
 #### cyrus-core
 - cyrus-core@0.0.9
 
-#### cyrus-claude-runner  
+#### cyrus-claude-runner
 - cyrus-claude-runner@0.0.18
 
 #### cyrus-edge-worker
