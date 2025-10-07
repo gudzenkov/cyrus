@@ -207,7 +207,7 @@ To test the Linear MCP (Model Context Protocol) integration in the claude-runner
 
 The test script demonstrates:
 - Loading Linear API token from environment variables
-- Configuring the `@tacticlaunch/mcp-linear` MCP server
+- Configuring the official Linear HTTP MCP server
 - Listing available MCP tools
 - Using Linear MCP tools to fetch user info and issues
 - Proper error handling and logging
@@ -218,7 +218,7 @@ The script will show:
 - Current user information
 - Issues in your Linear workspace
 
-This integration is automatically available in all Cyrus sessions - the EdgeWorker automatically configures the Linear MCP server for each repository using its Linear token.
+This integration is automatically available in all Cyrus sessions - the EdgeWorker automatically configures the official Linear MCP server for each repository using its Linear token.
 
 ## Publishing
 

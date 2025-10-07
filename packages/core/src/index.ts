@@ -36,9 +36,13 @@ export type {
 	LinearWebhookAgentSession,
 	LinearWebhookComment,
 	LinearWebhookCreator,
+	LinearWebhookGuidanceRule,
 	LinearWebhookIssue,
 	LinearWebhookNotification,
+	LinearWebhookOrganizationOrigin,
 	LinearWebhookTeam,
+	LinearWebhookTeamOrigin,
+	LinearWebhookTeamWithParent,
 } from "./webhook-types.js";
 export {
 	isAgentSessionCreatedWebhook,

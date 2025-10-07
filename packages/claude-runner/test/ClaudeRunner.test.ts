@@ -9,6 +9,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 // Mock file system operations
 vi.mock("fs", () => ({
 	mkdirSync: vi.fn(),
+	existsSync: vi.fn(() => false),
+	readFileSync: vi.fn(() => ""),
 	createWriteStream: vi.fn(() => ({
 		write: vi.fn(),
 		end: vi.fn(),
@@ -124,11 +126,12 @@ describe("ClaudeRunner", () => {
 			expect(mockQuery).toHaveBeenCalledWith({
 				prompt: "Hello Claude",
 				options: {
-					model: "opus",
-					fallbackModel: "sonnet",
+					model: "sonnet",
+					fallbackModel: "haiku",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
 					systemPrompt: { type: "preset", preset: "claude_code" },
+					settingSources: ["user", "project", "local"],
 				},
 			});
 		});
@@ -153,11 +156,12 @@ describe("ClaudeRunner", () => {
 			expect(mockQuery).toHaveBeenCalledWith({
 				prompt: "test",
 				options: {
-					model: "opus",
-					fallbackModel: "sonnet",
+					model: "sonnet",
+					fallbackModel: "haiku",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
 					systemPrompt: { type: "preset", preset: "claude_code" },
+					settingSources: ["user", "project", "local"],
 				},
 			});
 		});
@@ -182,11 +186,12 @@ describe("ClaudeRunner", () => {
 			expect(mockQuery).toHaveBeenCalledWith({
 				prompt: "test",
 				options: {
-					model: "opus",
-					fallbackModel: "sonnet",
+					model: "sonnet",
+					fallbackModel: "haiku",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
 					systemPrompt: "You are a helpful assistant",
+					settingSources: ["user", "project", "local"],
 				},
 			});
 		});

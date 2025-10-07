@@ -35,6 +35,7 @@ import type {
 	LinearWebhook,
 	LinearWebhookAgentSession,
 	LinearWebhookComment,
+	LinearWebhookGuidanceRule,
 	LinearWebhookIssue,
 	SerializableEdgeWorkerState,
 	SerializedCyrusAgentSession,
@@ -826,9 +827,29 @@ export class EdgeWorker extends EventEmitter {
 		console.log(
 			`[EdgeWorker] Handling agent session created: ${webhook.agentSession.issue.identifier}`,
 		);
-		const { agentSession } = webhook;
+		const { agentSession, guidance } = webhook;
 		const linearAgentActivitySessionId = agentSession.id;
 		const { issue } = agentSession;
+
+		// Log guidance if present
+		if (guidance && guidance.length > 0) {
+			console.log(
+				`[EdgeWorker] Agent guidance received: ${guidance.length} rule(s)`,
+			);
+			for (const rule of guidance) {
+				let origin = "Unknown";
+				if (rule.origin) {
+					if (rule.origin.__typename === "TeamOriginWebhookPayload") {
+						origin = `Team: ${rule.origin.team.displayName}`;
+					} else {
+						origin = "Organization";
+					}
+				}
+				console.log(
+					`[EdgeWorker]   - ${origin}: ${rule.body.substring(0, 100)}...`,
+				);
+			}
+		}
 
 		const commentBody = agentSession.comment?.body;
 		// HACK: This is required since the comment body is always populated, thus there is no other way to differentiate between the two trigger events
@@ -966,24 +987,28 @@ export class EdgeWorker extends EventEmitter {
 							fullIssue,
 							repository,
 							attachmentResult.manifest,
+							guidance,
 						)
 					: isMentionTriggered
 						? await this.buildMentionPrompt(
 								fullIssue,
 								agentSession,
 								attachmentResult.manifest,
+								guidance,
 							)
 						: systemPrompt
 							? await this.buildLabelBasedPrompt(
 									fullIssue,
 									repository,
 									attachmentResult.manifest,
+									guidance,
 								)
 							: await this.buildPromptV2(
 									fullIssue,
 									repository,
 									undefined,
 									attachmentResult.manifest,
+									guidance,
 								);
 
 			const { prompt, version: userPromptVersion } = promptResult;
@@ -1427,12 +1452,15 @@ export class EdgeWorker extends EventEmitter {
 	 * Build simplified prompt for label-based workflows
 	 * @param issue Full Linear issue
 	 * @param repository Repository configuration
+	 * @param attachmentManifest Optional attachment manifest
+	 * @param guidance Optional agent guidance rules from Linear
 	 * @returns Formatted prompt string
 	 */
 	private async buildLabelBasedPrompt(
 		issue: LinearIssue,
 		repository: RepositoryConfig,
 		attachmentManifest: string = "",
+		guidance?: LinearWebhookGuidanceRule[],
 	): Promise<{ prompt: string; version?: string }> {
 		console.log(
 			`[EdgeWorker] buildLabelBasedPrompt called for issue ${issue.identifier}`,
@@ -1560,6 +1588,9 @@ export class EdgeWorker extends EventEmitter {
 				.replace(/{{workspace_teams}}/g, workspaceTeams)
 				.replace(/{{workspace_labels}}/g, workspaceLabels);
 
+			// Append agent guidance if present
+			prompt += this.formatAgentGuidance(guidance);
+
 			if (attachmentManifest) {
 				console.log(
 					`[EdgeWorker] Adding attachment manifest to label-based prompt, length: ${attachmentManifest.length} characters`,
@@ -1584,12 +1615,14 @@ export class EdgeWorker extends EventEmitter {
 	 * @param repository Repository configuration
 	 * @param agentSession The agent session containing the mention
 	 * @param attachmentManifest Optional attachment manifest to append
+	 * @param guidance Optional agent guidance rules from Linear
 	 * @returns The constructed prompt and optional version tag
 	 */
 	private async buildMentionPrompt(
 		issue: LinearIssue,
 		agentSession: LinearWebhookAgentSession,
 		attachmentManifest: string = "",
+		guidance?: LinearWebhookGuidanceRule[],
 	): Promise<{ prompt: string; version?: string }> {
 		try {
 			console.log(
@@ -1614,6 +1647,9 @@ ${mentionContent}
 </mention_request>
 
 IMPORTANT: You were specifically mentioned in the comment above. Focus on addressing the specific question or request in the mention. You can use the Linear MCP tools to fetch additional context about the issue if needed.`;
+
+			// Append agent guidance if present
+			prompt += this.formatAgentGuidance(guidance);
 
 			// Append attachment manifest if any
 			if (attachmentManifest) {
@@ -1641,6 +1677,35 @@ IMPORTANT: You were specifically mentioned in the comment above. Focus on addres
 		const version = versionTagMatch ? versionTagMatch[1] : undefined;
 		// Return undefined for empty strings
 		return version?.trim() ? version : undefined;
+	}
+
+	/**
+	 * Format agent guidance rules as markdown for injection into prompts
+	 * @param guidance Array of guidance rules from Linear
+	 * @returns Formatted markdown string with guidance, or empty string if no guidance
+	 */
+	private formatAgentGuidance(guidance?: LinearWebhookGuidanceRule[]): string {
+		if (!guidance || guidance.length === 0) {
+			return "";
+		}
+
+		let formatted =
+			"\n\n<agent_guidance>\nThe following guidance has been configured for this workspace/team in Linear. Team-specific guidance takes precedence over workspace-level guidance.\n";
+
+		for (const rule of guidance) {
+			let origin = "Global";
+			if (rule.origin) {
+				if (rule.origin.__typename === "TeamOriginWebhookPayload") {
+					origin = `Team (${rule.origin.team.displayName})`;
+				} else {
+					origin = "Organization";
+				}
+			}
+			formatted += `\n## Guidance from ${origin}\n${rule.body}\n`;
+		}
+
+		formatted += "\n</agent_guidance>";
+		return formatted;
 	}
 
 	/**
@@ -1841,6 +1906,7 @@ ${reply.body}
 	 * @param repository Repository configuration
 	 * @param newComment Optional new comment to focus on (for handleNewRootComment)
 	 * @param attachmentManifest Optional attachment manifest
+	 * @param guidance Optional agent guidance rules from Linear
 	 * @returns Formatted prompt string
 	 */
 	private async buildPromptV2(
@@ -1848,6 +1914,7 @@ ${reply.body}
 		repository: RepositoryConfig,
 		newComment?: LinearWebhookComment,
 		attachmentManifest: string = "",
+		guidance?: LinearWebhookGuidanceRule[],
 	): Promise<{ prompt: string; version?: string }> {
 		console.log(
 			`[EdgeWorker] buildPromptV2 called for issue ${issue.identifier}${newComment ? " with new comment" : ""}`,
@@ -1976,6 +2043,9 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
 				// Remove the new comment section entirely
 				prompt = prompt.replace(/{{#if new_comment}}[\s\S]*?{{\/if}}/g, "");
 			}
+
+			// Append agent guidance if present
+			prompt += this.formatAgentGuidance(guidance);
 
 			// Append attachment manifest if provided
 			if (attachmentManifest) {
@@ -2701,13 +2771,13 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		parentSessionId?: string,
 	): Record<string, McpServerConfig> {
 		// Always inject the Linear MCP servers with the repository's token
+		// https://linear.app/docs/mcp
 		const mcpConfig: Record<string, McpServerConfig> = {
 			linear: {
-				type: "stdio",
-				command: "npx",
-				args: ["-y", "@tacticlaunch/mcp-linear"],
-				env: {
-					LINEAR_API_TOKEN: repository.linearToken,
+				type: "http",
+				url: "https://mcp.linear.app/mcp",
+				headers: {
+					Authorization: `Bearer ${repository.linearToken}`,
 				},
 			},
 			"cyrus-tools": createCyrusToolsServer(repository.linearToken, {

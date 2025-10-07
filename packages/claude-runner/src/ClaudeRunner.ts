@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import {
 	createWriteStream,
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	type WriteStream,
@@ -314,31 +315,57 @@ export class ClaudeRunner extends EventEmitter {
 			// Parse MCP config - merge file(s) and inline configs
 			let mcpServers = {};
 
-			// First, load from file(s) if provided
-			if (this.config.mcpConfigPath) {
-				const paths = Array.isArray(this.config.mcpConfigPath)
-					? this.config.mcpConfigPath
-					: [this.config.mcpConfigPath];
+			// Build list of config paths to load (in order of precedence)
+			const configPaths: string[] = [];
 
-				for (const path of paths) {
+			// Auto-detect .mcp.json in working directory (base config)
+			if (this.config.workingDirectory) {
+				const autoMcpPath = join(this.config.workingDirectory, ".mcp.json");
+				if (existsSync(autoMcpPath)) {
 					try {
-						const mcpConfigContent = readFileSync(path, "utf8");
-						const mcpConfig = JSON.parse(mcpConfigContent);
-						const servers = mcpConfig.mcpServers || {};
-						mcpServers = { ...mcpServers, ...servers };
+						// Validate it's readable JSON before adding to paths
+						const testContent = readFileSync(autoMcpPath, "utf8");
+						JSON.parse(testContent);
+						configPaths.push(autoMcpPath);
 						console.log(
-							`[ClaudeRunner] Loaded MCP servers from ${path}: ${Object.keys(servers).join(", ")}`,
+							`[ClaudeRunner] Auto-detected MCP config at ${autoMcpPath}`,
 						);
-					} catch (error) {
-						console.error(
-							`[ClaudeRunner] Failed to load MCP config from ${path}:`,
-							error,
+					} catch (_error) {
+						// Silently skip invalid .mcp.json files (could be test fixtures, etc.)
+						console.log(
+							`[ClaudeRunner] Skipping invalid .mcp.json at ${autoMcpPath}`,
 						);
 					}
 				}
 			}
 
-			// Then, merge inline config (overrides file config for same server names)
+			// Add explicitly configured paths (these will extend/override the base config)
+			if (this.config.mcpConfigPath) {
+				const explicitPaths = Array.isArray(this.config.mcpConfigPath)
+					? this.config.mcpConfigPath
+					: [this.config.mcpConfigPath];
+				configPaths.push(...explicitPaths);
+			}
+
+			// Load from all config paths
+			for (const path of configPaths) {
+				try {
+					const mcpConfigContent = readFileSync(path, "utf8");
+					const mcpConfig = JSON.parse(mcpConfigContent);
+					const servers = mcpConfig.mcpServers || {};
+					mcpServers = { ...mcpServers, ...servers };
+					console.log(
+						`[ClaudeRunner] Loaded MCP servers from ${path}: ${Object.keys(servers).join(", ")}`,
+					);
+				} catch (error) {
+					console.error(
+						`[ClaudeRunner] Failed to load MCP config from ${path}:`,
+						error,
+					);
+				}
+			}
+
+			// Finally, merge inline config (overrides file config for same server names)
 			if (this.config.mcpConfig) {
 				mcpServers = { ...mcpServers, ...this.config.mcpConfig };
 				console.log(
@@ -357,23 +384,27 @@ export class ClaudeRunner extends EventEmitter {
 			const queryOptions: Parameters<typeof query>[0] = {
 				prompt: promptForQuery,
 				options: {
-					model: this.config.model || "opus",
-					fallbackModel: this.config.fallbackModel || "sonnet",
+					model: this.config.model || "sonnet",
+					fallbackModel: this.config.fallbackModel || "haiku",
 					abortController: this.abortController,
 					// Use Claude Code preset by default to maintain backward compatibility
 					// This can be overridden if systemPrompt is explicitly provided
 					systemPrompt: this.config.systemPrompt || {
 						type: "preset",
 						preset: "claude_code",
+						...(this.config.appendSystemPrompt && {
+							append: this.config.appendSystemPrompt,
+						}),
 					},
+					// load file based settings, to maintain more backwards compatibility,
+					// particularly with CLAUDE.md files, settings files, and custom slash commands,
+					// see: https://docs.claude.com/en/docs/claude-code/sdk/migration-guide#settings-sources-no-longer-loaded-by-default
+					settingSources: ["user", "project", "local"],
 					...(this.config.workingDirectory && {
 						cwd: this.config.workingDirectory,
 					}),
 					...(this.config.allowedDirectories && {
 						allowedDirectories: this.config.allowedDirectories,
-					}),
-					...(this.config.appendSystemPrompt && {
-						appendSystemPrompt: this.config.appendSystemPrompt,
 					}),
 					...(processedAllowedTools && { allowedTools: processedAllowedTools }),
 					...(processedDisallowedTools && {
