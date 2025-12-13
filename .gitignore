@@ -6,7 +6,7 @@ tempdocs
 # Environment variables
 !**/.env.example
 !**/.env.secrets
-!**/.env.1p
+!**/.env
 .env*
 .env.secret-agents
 
