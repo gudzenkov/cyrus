@@ -794,10 +794,20 @@ export class EdgeWorker extends EventEmitter {
 			this.logger,
 		);
 
+		// Auto-detect direct mode when SLACK_SIGNING_SECRET is set
+		const useDirectSlackWebhooks =
+			process.env.SLACK_SIGNING_SECRET != null &&
+			process.env.SLACK_SIGNING_SECRET !== "";
+
+		const slackVerificationMode = useDirectSlackWebhooks ? "direct" : "proxy";
+		const slackSecret = useDirectSlackWebhooks
+			? process.env.SLACK_SIGNING_SECRET!
+			: process.env.CYRUS_API_KEY || "";
+
 		this.slackEventTransport = new SlackEventTransport({
 			fastifyServer: this.sharedApplicationServer.getFastifyInstance(),
-			verificationMode: "proxy",
-			secret: process.env.CYRUS_API_KEY || "",
+			verificationMode: slackVerificationMode,
+			secret: slackSecret,
 		});
 
 		this.slackEventTransport.on("event", (event: SlackWebhookEvent) => {
@@ -817,7 +827,9 @@ export class EdgeWorker extends EventEmitter {
 
 		this.slackEventTransport.register();
 
-		this.logger.info("Slack event transport registered");
+		this.logger.info(
+			`Slack event transport registered (${slackVerificationMode} mode)`,
+		);
 	}
 
 	/**
@@ -842,6 +854,23 @@ export class EdgeWorker extends EventEmitter {
 			const commentAuthor = extractCommentAuthor(event);
 			const prTitle = extractPRTitle(event);
 			const sessionKey = extractSessionKey(event);
+
+			// Skip comments from the bot itself to prevent infinite loops
+			const botUsername = process.env.GITHUB_BOT_USERNAME;
+			if (botUsername && commentAuthor === botUsername) {
+				this.logger.debug(
+					`Ignoring comment from bot user @${botUsername} on ${repoFullName}#${prNumber}`,
+				);
+				return;
+			}
+
+			// Only trigger on comments that mention the bot (when configured)
+			if (botUsername && !commentBody.includes(`@${botUsername}`)) {
+				this.logger.debug(
+					`Ignoring comment without @${botUsername} mention on ${repoFullName}#${prNumber}`,
+				);
+				return;
+			}
 
 			this.logger.info(
 				`Processing GitHub webhook: ${repoFullName}#${prNumber} by @${commentAuthor}`,
@@ -905,8 +934,9 @@ export class EdgeWorker extends EventEmitter {
 				return;
 			}
 
-			// Strip the @cyrusagent mention to get the task instructions
-			const taskInstructions = stripMention(commentBody);
+			// Strip the bot mention to get the task instructions
+			const mentionHandle = botUsername ? `@${botUsername}` : "@cyrusagent";
+			const taskInstructions = stripMention(commentBody, mentionHandle);
 
 			// Create workspace (git worktree) for the PR branch
 			const workspace = await this.createGitHubWorkspace(
