@@ -84,6 +84,7 @@ import {
 	isCommentOnPullRequest,
 	isIssueCommentPayload,
 	isPullRequestReviewCommentPayload,
+	isPullRequestReviewPayload,
 	stripMention,
 } from "cyrus-github-event-transport";
 import {
@@ -794,10 +795,17 @@ export class EdgeWorker extends EventEmitter {
 			this.logger,
 		);
 
-		// Auto-detect direct mode when SLACK_SIGNING_SECRET is set
-		const useDirectSlackWebhooks =
+		// Use direct Slack signature verification only when BOTH:
+		// 1. SLACK_SIGNING_SECRET is set (we have the secret to verify)
+		// 2. CYRUS_HOST_EXTERNAL is true (self-hosted: Slack sends directly to us)
+		// On cloud droplets, CYHOST forwards webhooks with Bearer token auth
+		// (it verifies the Slack signature itself and doesn't forward the headers).
+		const isExternalHost =
+			process.env.CYRUS_HOST_EXTERNAL?.toLowerCase().trim() === "true";
+		const hasSlackSigningSecret =
 			process.env.SLACK_SIGNING_SECRET != null &&
 			process.env.SLACK_SIGNING_SECRET !== "";
+		const useDirectSlackWebhooks = isExternalHost && hasSlackSigningSecret;
 
 		const slackVerificationMode = useDirectSlackWebhooks ? "direct" : "proxy";
 		const slackSecret = useDirectSlackWebhooks
@@ -855,6 +863,8 @@ export class EdgeWorker extends EventEmitter {
 			const prTitle = extractPRTitle(event);
 			const sessionKey = extractSessionKey(event);
 
+			const isPullRequestReview = isPullRequestReviewPayload(event.payload);
+
 			// Skip comments from the bot itself to prevent infinite loops
 			const botUsername = process.env.GITHUB_BOT_USERNAME;
 			if (botUsername && commentAuthor === botUsername) {
@@ -864,8 +874,24 @@ export class EdgeWorker extends EventEmitter {
 				return;
 			}
 
+			// For pull_request_review events, defensively check review state
+			// (must happen before the mention check — reviews don't contain @mentions)
+			if (isPullRequestReviewPayload(event.payload)) {
+				if (event.payload.review.state !== "changes_requested") {
+					this.logger.debug(
+						`Ignoring pull_request_review with state: ${event.payload.review.state}`,
+					);
+					return;
+				}
+			}
+
 			// Only trigger on comments that mention the bot (when configured)
-			if (botUsername && !commentBody.includes(`@${botUsername}`)) {
+			// Skip this check for pull_request_review events — reviews don't @mention the bot
+			if (
+				!isPullRequestReview &&
+				botUsername &&
+				!commentBody.includes(`@${botUsername}`)
+			) {
 				this.logger.debug(
 					`Ignoring comment without @${botUsername} mention on ${repoFullName}#${prNumber}`,
 				);
@@ -873,12 +899,12 @@ export class EdgeWorker extends EventEmitter {
 			}
 
 			this.logger.info(
-				`Processing GitHub webhook: ${repoFullName}#${prNumber} by @${commentAuthor}`,
+				`Processing GitHub webhook: ${repoFullName}#${prNumber} by @${commentAuthor}${isPullRequestReview ? " (pull_request_review)" : ""}`,
 			);
 
-			// Add "eyes" reaction to acknowledge receipt
+			// Add "eyes" reaction to acknowledge receipt (not for pull_request_review — we post a comment instead)
 			const reactionToken = event.installationToken || process.env.GITHUB_TOKEN;
-			if (reactionToken) {
+			if (reactionToken && !isPullRequestReview) {
 				const commentId = extractCommentId(event);
 				if (commentId) {
 					this.gitHubCommentService
@@ -918,6 +944,23 @@ export class EdgeWorker extends EventEmitter {
 				return;
 			}
 
+			// For pull_request_review events, post an instant acknowledgement comment
+			if (isPullRequestReview && reactionToken && prNumber) {
+				this.gitHubCommentService
+					.postIssueComment({
+						token: reactionToken,
+						owner: extractRepoOwner(event),
+						repo: extractRepoName(event),
+						issueNumber: prNumber,
+						body: "Received your change request. Getting started on those changes now.",
+					})
+					.catch((err: unknown) => {
+						this.logger.warn(
+							`Failed to post acknowledgement comment: ${err instanceof Error ? err.message : err}`,
+						);
+					});
+			}
+
 			// Determine the PR branch
 			let branchRef = extractPRBranchRef(event);
 
@@ -927,22 +970,26 @@ export class EdgeWorker extends EventEmitter {
 				branchRef = await this.fetchPRBranchRef(event, repository);
 			}
 
-			if (!branchRef) {
+			if (!branchRef || !prNumber) {
 				this.logger.error(
-					`Could not determine branch for ${repoFullName}#${prNumber}`,
+					`Could not determine branch or PR number for ${repoFullName}#${prNumber}`,
 				);
 				return;
 			}
 
-			// Strip the bot mention to get the task instructions
+			// For pull_request_review, the review body IS the task context (no mention to strip)
+			// For other events, strip the bot mention to get the task instructions
 			const mentionHandle = botUsername ? `@${botUsername}` : "@cyrusagent";
-			const taskInstructions = stripMention(commentBody, mentionHandle);
+			const taskInstructions = isPullRequestReview
+				? commentBody ||
+					"A reviewer has requested changes on this PR. Read the review comments to understand what needs to be changed."
+				: stripMention(commentBody, mentionHandle);
 
 			// Create workspace (git worktree) for the PR branch
 			const workspace = await this.createGitHubWorkspace(
 				repository,
 				branchRef,
-				prNumber!,
+				prNumber,
 			);
 
 			if (!workspace) {
@@ -999,11 +1046,13 @@ export class EdgeWorker extends EventEmitter {
 			session.metadata.commentId = String(extractCommentId(event));
 
 			// Build the system prompt for this GitHub PR session
-			const systemPrompt = this.buildGitHubSystemPrompt(
-				event,
-				branchRef,
-				taskInstructions,
-			);
+			const systemPrompt = isPullRequestReview
+				? this.buildGitHubChangeRequestSystemPrompt(
+						event,
+						branchRef,
+						taskInstructions,
+					)
+				: this.buildGitHubSystemPrompt(event, branchRef, taskInstructions);
 
 			// Build allowed tools and directories
 			// Exclude Slack MCP tools from GitHub sessions
@@ -1237,6 +1286,52 @@ ${taskInstructions}
 - Make changes directly to the code on this branch
 - After making changes, commit and push them to the branch
 - Be concise in your responses as they will be posted back to the GitHub PR`;
+	}
+
+	/**
+	 * Build a system prompt for a GitHub PR change request review session.
+	 */
+	private buildGitHubChangeRequestSystemPrompt(
+		event: GitHubWebhookEvent,
+		branchRef: string,
+		reviewBody: string,
+	): string {
+		const repoFullName = extractRepoFullName(event);
+		const prNumber = extractPRNumber(event);
+		const prTitle = extractPRTitle(event);
+		const commentAuthor = extractCommentAuthor(event);
+		const commentUrl = extractCommentUrl(event);
+
+		const hasReviewBody = reviewBody.trim().length > 0;
+
+		const taskSection = hasReviewBody
+			? `## Reviewer Feedback
+${reviewBody}
+
+## Instructions
+- Read the PR diff and the reviewer's feedback above to understand all requested changes
+- You are already checked out on the PR branch \`${branchRef}\`
+- Address all the reviewer's feedback and make the necessary changes
+- After making changes, commit and push them to the branch
+- Respond with a concise summary of the changes you made`
+			: `## Instructions
+- The reviewer has requested changes but did not leave a summary comment
+- Use \`gh api repos/${repoFullName}/pulls/${prNumber}/reviews\` to read the review comments and understand what changes are needed
+- You are already checked out on the PR branch \`${branchRef}\`
+- Address all the reviewer's feedback and make the necessary changes
+- After making changes, commit and push them to the branch
+- Respond with a concise summary of the changes you made`;
+
+		return `You are working on a GitHub Pull Request that has received a change request review.
+
+## Context
+- **Repository**: ${repoFullName}
+- **PR**: #${prNumber} - ${prTitle || "Untitled"}
+- **Branch**: ${branchRef}
+- **Reviewer**: @${commentAuthor}
+- **Review URL**: ${commentUrl}
+
+${taskSection}`;
 	}
 
 	/**
